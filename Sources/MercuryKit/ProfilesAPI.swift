@@ -226,8 +226,10 @@ public struct CronJob: Sendable, Equatable, Identifiable {
     public var id: String { jobID }
 
     /// The routine's display name with any `[bot:<name>]` namespace stripped.
+    /// The tag matches case-insensitively, like `belongsToBot` and the
+    /// desktop's `BOT_TAG_RE`.
     public var displayName: String {
-        guard name.hasPrefix("[bot:"), let close = name.firstIndex(of: "]") else {
+        guard name.lowercased().hasPrefix("[bot:"), let close = name.firstIndex(of: "]") else {
             return name
         }
         let stripped = name[name.index(after: close)...]

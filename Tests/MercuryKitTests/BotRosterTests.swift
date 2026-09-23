@@ -265,6 +265,15 @@ struct CronJobTests {
         #expect(job.displayName == "Digest")
         #expect(!job.belongsToBot(named: "research"))  // prefix of the name is not the name
 
+        // The tag itself is case-insensitive too (desktop `BOT_TAG_RE` is
+        // `/i`), so a routine that belongs to a bot also displays untagged.
+        for tagged in ["[Bot:ops] Digest", "[BOT:ops]Digest", "[bOt:OPS]   Digest"] {
+            let job = try #require(
+                CronJob(json: .object(["job_id": "c", "name": .string(tagged)])))
+            #expect(job.belongsToBot(named: "ops"))
+            #expect(job.displayName == "Digest")
+        }
+
         let bare = try #require(CronJob(json: try json(#"{"job_id": "b", "name": "[bot:ops]  "}"#)))
         #expect(bare.displayName == "[bot:ops]  ")  // nothing after the tag: keep the raw name
     }
