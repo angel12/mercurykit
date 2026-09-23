@@ -92,6 +92,8 @@ func adoptBotMode(connection: HermesConnection, row: JSONValue) async throws {
         try await connection.removeCronJob(jobID: job.jobID, profile: "p")
     }
     _ = CronJob(json: row)
+    let failure = CronManageError(action: "pause", message: nil)
+    _ = (failure.action, failure.message, failure.errorDescription)
     _ = GatewayEvent.Kind.cronChanged
 }
 

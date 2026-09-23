@@ -8,12 +8,13 @@ Run on 2026-09-22, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Refere
 
 ### Verified
 
-- `swift test`: **441 tests / 62 suites passed** (401 / 56 before the branch).
+- `swift test`: **445 tests / 62 suites passed** (401 / 56 before the branch).
 - `swift build` and `swift build --build-tests`, from a clean `.build`: no warnings.
 - `python3 scripts/check-api-constraints.py`: passed. `Fixtures/ExternalConsumer.swift` calls every Bot Mode type, property and method without `@testable`, and extends `BotChatPolicy` from outside the module. Making `metaWriteOutcome` internal fails the check (run by hand, then reverted).
 - `actionlint .github/workflows/*.yml`: passed with no findings. The branch does not change the workflows.
 - Generic iOS Simulator and generic visionOS Simulator `xcodebuild` package builds, unsigned: both succeeded with no warnings. These are builds, not simulator execution.
 - Mutation check, run by hand and then reverted: making `findCanonicalBotChat` swallow request errors into `nil` fails all three fail-closed cases in `BotModeRPCTests`.
+- Cron tool failures: `cron.manage` passes the cron tool's JSON through, so a failure such as an unknown job id arrives as a successful RPC result with `success: false` and `error` (`tool_error` in `tools/cronjob_tools.py`). `listCronJobs`, `setCronJobEnabled` and `removeCronJob` throw `CronManageError` on an explicit `success: false`; a result without `success` (optional in `CronManageResult`) is not a failure. This is a deliberate change from Chat's embedded kit, which returned normally. Before the check was wired in, all four `toolLevelFailureThrows` cases failed. Chat's three call sites already catch and show `errorDescription`, so the app needs no change.
 - Upstream rules, confirmed at `9fe737aef2` and cited in doc comments:
   - `"Bot Chat"` is `BOT_CHAT_TITLE` in `tools/bot_mode_probe.py`, used by `agent/system_prompt.py`, `agent/turn_context.py`, `cron/scheduler_delivery.py` and `session.list`'s title lookup.
   - `hermes-bots` is the `ui_meta` key read by `tools/bot_mode_probe.py` and `hermes_cli/profiles.py` and written by the desktop plugin (`apps/desktop/src/plugins/hermes-bots/data.ts`).

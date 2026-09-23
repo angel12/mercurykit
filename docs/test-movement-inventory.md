@@ -87,7 +87,7 @@ Merged at `f94bfafb9e6f90b8ff7fb12562a8216083433632` (PRs #78, #79); kit diff `4
 |---|---|---|
 | `BotRosterTests.swift` (new) | Moved/adapted | BotRosterTests.swift — throwing `json(_:)` helper instead of `try!`; adds CronJob `id`/`prompt_preview`/name/epoch/offset/zero fallbacks, exact timestamps, the raw `ui_meta` namespace and CAS revision, malformed rows and the canonical-title constant. The two `isCompactCommand` tests (`compactCommandsAreIntercepted`, `everythingElsePassesThrough`) are retained in the consumer: they move to ChatCoreTests with the ChatCore extension |
 
-Kit-only changes for the same work: `BotModeRPCTests.swift` (request capture for every Bot Mode call, the CAS revision present and absent, integer revisions on the wire, and fail-closed canonical lookup), `VoiceAPICompletenessTests.swift` (`cron.changed`) and `Fixtures/ExternalConsumer.swift` (Bot Mode public API and an external `BotChatPolicy` extension).
+Kit-only changes for the same work: `BotModeRPCTests.swift` (request capture for every Bot Mode call, the CAS revision present and absent, integer revisions on the wire, and fail-closed canonical lookup, and `CronManageError` on a cron tool `success: false`), `VoiceAPICompletenessTests.swift` (`cron.changed`) and `Fixtures/ExternalConsumer.swift` (Bot Mode public API and an external `BotChatPolicy` extension).
 
 ## Additional reconciliation coverage
 

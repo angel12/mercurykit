@@ -289,6 +289,57 @@ struct BotModeRPCTests {
         }
     }
 
+    /// The cron tool reports failures inside a successful RPC result
+    /// (`{"success": false, "error": …}`, `tools/cronjob_tools.py`), so a
+    /// missing job or a broken store must not read as success.
+    @Test(arguments: ["list", "pause", "resume", "remove"])
+    func toolLevelFailureThrows(action: String) async throws {
+        let caught = try await withGateway(
+            .result(#"{"success":false,"error":"Job 'j1' not found"}"#)
+        ) { connection, _ -> Error? in
+            do {
+                switch action {
+                case "list": _ = try await connection.listCronJobs(profile: "researcher")
+                case "remove": try await connection.removeCronJob(jobID: "j1", profile: "researcher")
+                default:
+                    try await connection.setCronJobEnabled(
+                        jobID: "j1", enabled: action == "resume", profile: "researcher")
+                }
+                return nil
+            } catch {
+                return error
+            }
+        }
+        let error = try #require(caught as? CronManageError)
+        #expect(error == CronManageError(action: action, message: "Job 'j1' not found"))
+    }
+
+    /// `success` is optional in `CronManageResult`; only an explicit false
+    /// is a failure.
+    @Test(arguments: [#"{"jobs":[]}"#, #"{"success":true,"jobs":[]}"#])
+    func listWithoutAFailureFlagSucceeds(result: String) async throws {
+        let list = try await withGateway(.result(result)) { connection, _ in
+            try await connection.listCronJobs(profile: "researcher")
+        }
+        #expect(list.jobs.isEmpty)
+    }
+
+    @Test func pauseWithoutAFailureFlagSucceeds() async throws {
+        try await withGateway(.result(#"{"job":{"job_id":"j1"}}"#)) { connection, _ in
+            try await connection.setCronJobEnabled(jobID: "j1", enabled: false, profile: "researcher")
+        }
+    }
+
+    @Test func cronManageErrorDescribesTheFailure() {
+        #expect(
+            CronManageError(action: "remove", message: "Job 'j1' not found").errorDescription
+                == "The routine couldn't be updated (remove): Job 'j1' not found")
+        #expect(
+            CronManageError(action: "list", message: nil).errorDescription
+                == "The routines couldn't be loaded.")
+        #expect(CronManageError(action: "pause", message: "  ").errorDescription == "The routine couldn't be updated (pause).")
+    }
+
     @Test func removeCronJobRemovesByJobID() async throws {
         try await withGateway(.result(#"{"success":true,"removed_job":{"id":"j1"}}"#)) { connection, frames in
             try await connection.removeCronJob(jobID: "j1", profile: "researcher")

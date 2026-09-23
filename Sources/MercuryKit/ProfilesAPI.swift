@@ -287,6 +287,40 @@ public struct CronJobList: Sendable, Equatable {
     public var scopedToProfile: Bool
 }
 
+/// `cron.manage` answered, but the cron tool reported a failure.
+///
+/// Upstream passes the tool's JSON through (`CronManageResult` in
+/// `tui_gateway/contracts/tools_commands.py`), so a missing job or a broken
+/// store arrives as a successful RPC result with `success: false` and an
+/// `error` string (`tool_error` in `tools/cronjob_tools.py`), not as an RPC
+/// error. Results without `success` (the field is optional) are not failures.
+public struct CronManageError: Error, LocalizedError, Sendable, Equatable {
+    /// The `cron.manage` action: `list`, `pause`, `resume` or `remove`.
+    public var action: String
+    /// The tool's `error` text, when it sent one.
+    public var message: String?
+
+    public init(action: String, message: String?) {
+        self.action = action
+        self.message = message
+    }
+
+    public var errorDescription: String? {
+        let base =
+            action == "list"
+            ? "The routines couldn't be loaded" : "The routine couldn't be updated (\(action))"
+        let detail = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return detail.isEmpty ? base + "." : base + ": " + detail
+    }
+
+    /// Throws when `result` is an explicit `success: false`.
+    static func check(_ result: JSONValue, action: String) throws {
+        if result["success"]?.boolValue == false {
+            throw CronManageError(action: action, message: result["error"]?.stringValue)
+        }
+    }
+}
+
 // MARK: - Bot meta writes
 
 /// Outcome of a `profiles.configure` ui_meta write.
@@ -485,7 +519,9 @@ extension HermesConnection {
     /// A profile's cron jobs (bot routines are named `[bot:<name>] …`).
     /// Includes paused jobs — excluding them reads as deletion in a toggle
     /// UI. `scopedToProfile` is false on gateways that ignored the profile
-    /// param; apply `CronJob.belongsToBot` there.
+    /// param; apply `CronJob.belongsToBot` there. Throws `CronManageError`
+    /// when the cron tool reports `success: false`, so a failed read never
+    /// looks like an empty store.
     public func listCronJobs(
         profile: String, timeout: TimeInterval = 30
     ) async throws -> CronJobList {
@@ -497,30 +533,36 @@ extension HermesConnection {
                 "profile": .string(profile),
             ]),
             timeout: timeout)
+        try CronManageError.check(result, action: "list")
         return CronJobList(
             jobs: result["jobs"]?.arrayValue?.compactMap(CronJob.init(json:)) ?? [],
             scopedToProfile: result["scoped"]?.stringValue == profile)
     }
 
-    /// Pause or resume one cron job in the profile's store.
+    /// Pause or resume one cron job in the profile's store. Throws
+    /// `CronManageError` when the cron tool reports `success: false` (for
+    /// example, an unknown job id).
     public func setCronJobEnabled(
         jobID: String, enabled: Bool, profile: String, timeout: TimeInterval = 30
     ) async throws {
-        _ = try await request(
+        let action = enabled ? "resume" : "pause"
+        let result = try await request(
             "cron.manage",
             params: .object([
-                "action": .string(enabled ? "resume" : "pause"),
+                "action": .string(action),
                 "name": .string(jobID),
                 "profile": .string(profile),
             ]),
             timeout: timeout)
+        try CronManageError.check(result, action: action)
     }
 
-    /// Permanently remove one cron job from the profile's store.
+    /// Permanently remove one cron job from the profile's store. Throws
+    /// `CronManageError` when the cron tool reports `success: false`.
     public func removeCronJob(
         jobID: String, profile: String, timeout: TimeInterval = 30
     ) async throws {
-        _ = try await request(
+        let result = try await request(
             "cron.manage",
             params: .object([
                 "action": .string("remove"),
@@ -528,5 +570,6 @@ extension HermesConnection {
                 "profile": .string(profile),
             ]),
             timeout: timeout)
+        try CronManageError.check(result, action: "remove")
     }
 }
