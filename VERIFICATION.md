@@ -1,6 +1,6 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`). Mercury Chat uses it (angel12/mercurychat#81 and #82), and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated. `0.2.0` and `0.3.0` are not yet released; the sections below record standalone verification of branches ahead of `0.1.0`, pending each one's own tag.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`) and `0.3.0` (`478b021`). Mercury Chat uses `0.3.0` (it adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85 and `0.3.0` in #87), and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
 ## Profile editor branch (`feat/profile-editor`)
 
@@ -17,11 +17,14 @@ Run on 2026-09-23, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstre
 - Result-shape audit: the test fixtures `described`, `appliedAll`, the confirm reply (`aGuardedModelAsksForConfirmation`) and the `{"ok": false, ...}` reply (`aFailedSectionIsReported`) validate against `ProfilesDescribeResult` / `ProfilesConfigureResult`. `inventory`, with its one deliberately invalid provider row (`{"name": "no slug, skipped"}`) removed, validates against `ModelOptionsResult`. That row exists in the test fixture to prove the kit skips provider rows without a `slug`, by design: `ModelOptionsResult.providers[].slug` is required by the contract (confirmed by re-validating the fixture with the row left in, which fails with `providers.2.slug: Field required`), so a row without one is not a valid provider and the kit is right to drop it rather than surface it. Re-run at `67f7e1d6b3` with identical results.
 - Upstream drift `16fe260aab..520fead094` (8 commits, all `fix(desktop)`/`fix(agent)`) **and extended to `16fe260aab..67f7e1d6b3`** (9 commits total, the 9th being a `fmt(js)` merge-formatting commit; none touch `tui_gateway/contracts`): the JSON schemas of all 62 contracts the kit uses (every method, event and server request named in `Sources/`, now including `profiles.describe` and `model.options`) are unchanged at both `520fead094` and at head `67f7e1d6b3`. `METHODS`/`EVENTS`/`SERVER_REQUESTS` totals are identical (235 / 73 / 13) at `16fe260aab`, `520fead094` and `67f7e1d6b3`, and no method, event or server request was added or removed upstream across the whole range, so there is nothing new the kit doesn't use to report.
 - Mutation check, by hand and then reverted: dropping empty-array handling in `ProfileChanges.params(name:)` fails `anEmptyListIsSent` and `everySectionMapsToItsDeclaredKey`; returning an empty `failedSections` fails `aFailedSectionIsReported`. Both mutations were reverted and the suite re-passed.
+- Hosted CI on GitHub's `macos-15-arm64` image (version `20260828.587`) with Xcode 16.4 / Swift 6.1.2: **466 tests passed** with no compiler warnings, and `check-api-constraints.py` passed. That was on the pull request (run `35917919465`, `d5ead82`) and on `main` after the merge (run `35918121542`, `478b021`).
+- Published: merged as angel12/mercurykit#5 (`478b021`) and tagged `0.3.0`.
+- Live, through Mercury Chat's Advanced editor (angel12/mercurychat#87) against `hermes serve` 0.21.4 on test profiles that were then deleted: `describeProfile`, `modelInventory(profile:)`, and `configureProfile` with `soul`, `disabled_skills` and a `model` + `provider` pin. Each change reached disk and read back through `describeProfile`.
+- That check found an upstream bug: once any named profile exists, the multiplexing gateway makes `profiles.describe` report every toolset `enabled: false`. It reads `XAI_API_KEY` inside `_get_platform_tools` without a secret scope, and `_describe_toolsets` swallows the resulting `UnscopedSecretError` as an empty set. The kit decodes what the server sends, so `ProfileDescription.toolsets` all read disabled in that state; Chat keeps toolsets read-only while every one reads disabled. The same code is on upstream `main` at `36d2229e38`.
 
 ### Not run or pending
 
-- No live-backend call (left to Chat's advanced-editor PR).
-- Hosted CI, review, and the `0.3.0` tag.
+- Not exercised live: `enabled_toolsets`, `enabled_mcp_servers` and the `confirm_expensive_model` handshake (no guarded model or MCP servers on the test machine). They're covered by request-capture tests.
 
 ## Profile creation branch (`feat/profiles-create`)
 
@@ -39,10 +42,13 @@ Run on 2026-09-23, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstre
 - Error codes, from `tui_gateway/methods_profiles.py`: 4061 name required, 4062 invalid or taken name or missing `clone_from` (the message says which), 5062 anything else.
 - Upstream drift `9fe737aef2..16fe260aab` (661 commits): the JSON schemas of all 62 contracts the kit uses (every method, event and server request named in `Sources/`, plus `profiles.create`) are unchanged. Upstream added a `display.*` method family and a `display.install.sudo` server request, which the kit doesn't use; it leaves that request for other clients.
 
+- Hosted CI on GitHub's `macos-15-arm64` image (version `20260828.587`) with Xcode 16.4 / Swift 6.1.2: **453 tests passed** with no compiler warnings, and `check-api-constraints.py` passed. That was on the pull request (run `35908340797`, `3156736`) and on `main` after the merge (run `35908733305`, `b165d20`).
+- Published: merged as angel12/mercurykit#4 (`b165d20`) and tagged `0.2.0`.
+- Live, through Mercury Chat's New Bot flow (angel12/mercurychat#85) against `hermes serve` 0.21.4: `createProfile` created a profile with a composed SOUL, a description, `clone_from: "default"` and `share_auth: true`, all confirmed on disk. The test profile was then deleted.
+
 ### Not run or pending
 
-- No live-backend call of `profiles.create`. It creates a real profile, so it's left to Chat's create-bot PR.
-- Hosted CI for this branch, reviewer acceptance and the `0.2.0` tag.
+- Nothing outstanding for this release.
 
 ## Bot Mode parity branch (`feat/bot-mode-parity`)
 
