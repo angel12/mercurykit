@@ -109,7 +109,10 @@ public actor GatewayClient: GatewayDialing {
 
     /// Backend contract version reported in gateway payloads (session.info's
     /// `desktop_contract`); the app warns when older than what it was built
-    /// against.
+    /// against. Frozen at 6, the reconciliation baseline, so an app still
+    /// comparing against it sees no change; each app now states its own
+    /// minimum with `DesktopContractRequirement`.
+    @available(*, deprecated, message: "Supply your app's minimum with DesktopContractRequirement (.promptEvents is 6, .serverRequests is 7).")
     public static let builtAgainstDesktopContract = 6
     public static let maximumInboundMessageSize = 8 * 1024 * 1024
 

@@ -154,3 +154,26 @@ struct UnionSessionPolicyTests {
         if case .failed = await connection.closeSession(sessionID: "runtime") {} else { Issue.record("Disconnected close must fail") }
     }
 }
+
+@Suite("Desktop contract requirement")
+struct DesktopContractRequirementTests {
+    @Test func eachAppSuppliesItsOwnMinimum() {
+        #expect(DesktopContractRequirement.promptEvents.minimum == 6)
+        #expect(DesktopContractRequirement.serverRequests.minimum == 7)
+        let requirement = DesktopContractRequirement.serverRequests
+        #expect(requirement.assess(nil) == .unknown)
+        #expect(requirement.assess(6) == .older(6))
+        #expect(requirement.assess(7) == .satisfied(7))
+        // Contract 8 (connectors only) is not a warning for either app.
+        #expect(requirement.assess(8) == .satisfied(8))
+        #expect(DesktopContractRequirement.promptEvents.assess(8) == .satisfied(8))
+        #expect(DesktopContractRequirement(minimum: 9).assess(8) == .older(8))
+    }
+
+    /// Chat compares against the old constant with `!=`; its notice must not
+    /// change until Chat moves to a requirement of its own.
+    @available(*, deprecated)
+    @Test func theLegacyConstantStaysAtTheBaseline() {
+        #expect(GatewayClient.builtAgainstDesktopContract == 6)
+    }
+}
