@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Injectable transport used by the connection supervisor.
 public protocol GatewayDialing: Actor {
@@ -55,6 +56,8 @@ extension URLSessionWebSocketTask: GatewaySocket {
 /// a busy agent turn can legitimately go minutes without a frame — quiet is
 /// NOT dead here, so no read timeout is applied.
 public actor GatewayClient: GatewayDialing {
+    private static let logger = Logger(subsystem: "MercuryKit", category: "GatewayClient")
+
     public enum State: Sendable, Equatable {
         case idle
         case connecting
@@ -83,6 +86,8 @@ public actor GatewayClient: GatewayDialing {
     private let authenticator: HermesAuthenticator
     private let urlSession: URLSession
     private let makeSocket: @Sendable (URL) -> any GatewaySocket
+    /// Which server→client requests this app answers (contract ≥ 7).
+    public nonisolated let serverRequestPolicy: ServerRequestPolicy
     private var task: (any GatewaySocket)?
     private var receiveLoop: Task<Void, Never>?
 
@@ -108,7 +113,10 @@ public actor GatewayClient: GatewayDialing {
     public static let builtAgainstDesktopContract = 6
     public static let maximumInboundMessageSize = 8 * 1024 * 1024
 
-    public init(endpoint: ServerEndpoint, authenticator: HermesAuthenticator) {
+    public init(
+        endpoint: ServerEndpoint, authenticator: HermesAuthenticator,
+        serverRequestPolicy: ServerRequestPolicy = .disabled
+    ) {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
@@ -118,7 +126,10 @@ public actor GatewayClient: GatewayDialing {
         config.timeoutIntervalForResource = 7 * 24 * 3600
         let session = URLSession(configuration: config)
 
-        self.init(endpoint: endpoint, authenticator: authenticator, urlSession: session) { url in
+        self.init(
+            endpoint: endpoint, authenticator: authenticator, urlSession: session,
+            serverRequestPolicy: serverRequestPolicy
+        ) { url in
             let task = session.webSocketTask(with: url)
             // Bound gateway snapshots; bulk history travels over REST.
             task.maximumMessageSize = Self.maximumInboundMessageSize
@@ -132,20 +143,26 @@ public actor GatewayClient: GatewayDialing {
         endpoint: ServerEndpoint,
         authenticator: HermesAuthenticator,
         urlSession: URLSession = URLSession(configuration: .ephemeral),
+        serverRequestPolicy: ServerRequestPolicy = .disabled,
         makeSocket: @escaping @Sendable (URL) -> any GatewaySocket
     ) {
         self.endpoint = endpoint
         self.authenticator = authenticator
         self.urlSession = urlSession
+        self.serverRequestPolicy = serverRequestPolicy
         self.makeSocket = makeSocket
     }
 
-    public init(endpoint: ServerEndpoint, token: String?) {
+    public init(
+        endpoint: ServerEndpoint, token: String?,
+        serverRequestPolicy: ServerRequestPolicy = .disabled
+    ) {
         self.init(
             endpoint: endpoint,
             authenticator: HermesAuthenticator(
                 endpoint: endpoint,
-                credentials: token.map { .sessionToken($0) }))
+                credentials: token.map { .sessionToken($0) }),
+            serverRequestPolicy: serverRequestPolicy)
     }
 
     deinit {
@@ -443,7 +460,8 @@ public actor GatewayClient: GatewayDialing {
             let frame = try? JSONDecoder().decode(JSONValue.self, from: data)
         else { return }
 
-        // Only frames with method == "event" and params.type are events;
+        // Only frames with method == "event" and params.type are events; a
+        // frame with another method and a string id is a server request;
         // everything else is a response.
         if frame["method"]?.stringValue == "event",
             let params = frame["params"], let type = params["type"]?.stringValue
@@ -464,6 +482,11 @@ public actor GatewayClient: GatewayDialing {
             return
         }
 
+        if let request = ServerRequest(frame: frame) {
+            routeServerRequest(request)
+            return
+        }
+
         guard let id = frame["id"]?.intValue, let cont = pending.removeValue(forKey: id) else {
             return
         }
@@ -475,6 +498,61 @@ public actor GatewayClient: GatewayDialing {
                     data: error["data"]))
         } else {
             cont.resume(returning: frame["result"] ?? .null)
+        }
+    }
+
+    // MARK: Server requests
+
+    /// See `ServerRequestPolicy` for the three outcomes. Runs inline in the
+    /// receive loop, so a routed request is yielded in wire order with the
+    /// events around it.
+    private func routeServerRequest(_ request: ServerRequest) {
+        // Disabled: ignored, exactly as a contract-6 client always did (the
+        // frame used to fall through to the integer-id response lookup).
+        guard serverRequestPolicy.isEnabled else { return }
+        if serverRequestPolicy.answerableMethods.contains(request.method) {
+            guard request.isDisplayable else {
+                // Routed but impossible to show: refuse at once so the agent
+                // gets a skip/decline instead of waiting out its deadline.
+                replyError(
+                    to: request, code: -32602,
+                    message: "\(request.method) request could not be decoded by this client")
+                return
+            }
+            let event = GatewayEvent(serverRequest: request)
+            for sub in subscribers.values { sub.yield(event) }
+            return
+        }
+        switch serverRequestPolicy.unanswerable {
+        case .leaveForOtherClients:
+            Self.logger.debug(
+                "left server request \(request.method, privacy: .public) for another client")
+        case .refuse:
+            replyError(
+                to: request, code: HermesError.RPCCode.methodNotFound,
+                message: "\(request.method) is not handled by this client")
+        }
+    }
+
+    /// A JSON-RPC error response to a server request. It has no `method`
+    /// member: upstream reads only method-less frames as responses
+    /// (`server_requests.is_response_frame`).
+    private func replyError(to request: ServerRequest, code: Int, message: String) {
+        guard state == .ready, let task else { return }
+        let frame: JSONValue = .object([
+            "jsonrpc": "2.0",
+            "id": .string(request.id),
+            "error": .object(["code": .number(Double(code)), "message": .string(message)]),
+        ])
+        guard let data = try? JSONEncoder().encode(frame),
+            let text = String(data: data, encoding: .utf8)
+        else { return }
+        let method = request.method
+        Self.logger.info("refused server request \(method, privacy: .public) (\(code))")
+        task.sendText(text) { error in
+            guard error != nil else { return }
+            // The socket is going away; its close tells the agent the same.
+            Self.logger.debug("refusal for \(method, privacy: .public) was not written")
         }
     }
 }
