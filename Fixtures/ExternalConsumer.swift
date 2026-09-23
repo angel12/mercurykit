@@ -52,3 +52,55 @@ func adoptContract7(endpoint: ServerEndpoint, authenticator: HermesAuthenticator
         || error.isUnknownParameter || error.isProfileUnavailable
     await connection.rest.ttsLease(name: "mercury", active: true)
 }
+
+// Chat's Bot Mode API (mercurychat #78/#79) an app uses without @testable.
+func adoptBotMode(connection: HermesConnection, row: JSONValue) async throws {
+    let bots: [BotSummary] = try await connection.listBots(timeout: 60)
+    if let bot = bots.first ?? BotSummary(json: row) {
+        _ = (bot.id, bot.name, bot.isDefault, bot.model, bot.provider, bot.profileDescription)
+        _ = (bot.displayName, bot.skillCount, bot.hasAvatar, bot.metaTitle, bot.metaDescription)
+        _ = (bot.shape, bot.colorHex, bot.hidden, bot.pinned, bot.workerLastActive)
+        _ = (bot.title, bot.preview, bot.lastActivity, bot.uiMetaRaw, bot.uiMetaRevision)
+        if let stub = bot.canonicalSession ?? bot.lastSession {
+            _ = (stub.storedID, stub.resolvedID, stub.title, stub.preview, stub.lastActive, stub.messageCount)
+        }
+        let outcome = try await connection.configureBotMeta(
+            name: bot.name, meta: bot.uiMetaRaw ?? [:], expectedRevision: bot.uiMetaRevision)
+        switch outcome {
+        case .persisted, .conflict, .failed: break
+        }
+        _ = HermesConnection.metaWriteOutcome(from: [:])
+    }
+    _ = BotSessionStub(json: row)
+    let canonical: BotSessionStub? = try await connection.findCanonicalBotChat(profile: "p")
+    _ = canonical
+    _ = BotChatPolicy.isCanonicalRow(rootTitle: nil, title: BotChatPolicy.canonicalTitle)
+    _ = BotChatPolicy.isCompactCommand("/new")
+    let status: String = try await connection.compressSession(sessionID: "rt")
+    _ = status
+
+    if let asset = try await connection.profileAvatar(name: "p") ?? ProfileAsset(json: row) {
+        _ = (asset.mime, asset.data)
+    }
+    try await connection.setProfileAvatar(name: "p", dataURL: nil)
+
+    let list: CronJobList = try await connection.listCronJobs(profile: "p")
+    for job in list.jobs where list.scopedToProfile || job.belongsToBot(named: "p") {
+        _ = (job.id, job.jobID, job.name, job.displayName, job.schedule, job.prompt, job.enabled)
+        _ = (job.state, job.lastStatus, job.lastRunAt, job.nextRunAt, job.lastFireError, job.deliver)
+        try await connection.setCronJobEnabled(jobID: job.jobID, enabled: !job.enabled, profile: "p")
+        try await connection.removeCronJob(jobID: job.jobID, profile: "p")
+    }
+    _ = CronJob(json: row)
+    _ = GatewayEvent.Kind.cronChanged
+}
+
+// The composer rule the kit leaves to Chat: ChatCore re-adds it this way, so
+// BotChatPolicy must stay a public enum an external module can extend.
+extension BotChatPolicy {
+    public static func isCompactCommand(_ text: String) -> Bool {
+        let command = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", maxSplits: 1).first.map(String.init)
+        return ["/new", "/reset", "/compact"].contains(command?.lowercased() ?? "")
+    }
+}
