@@ -93,6 +93,8 @@ Kit-only changes for the same work: `BotModeRPCTests.swift` (request capture for
 
 `ProfileCreateTests.swift` (new): `profiles.create` request capture, result decoding and errors, for mercurychat #27 Phase 3. It has no consumer counterpart: Chat never had this call.
 
+`ProfileEditorTests.swift` (new): `profiles.describe`, the editor sections of `profiles.configure`, and a profile-scoped `model.options` (`describeProfile`, `configureProfile`, `modelInventory`), for the same mercurychat #27 Phase 3 advanced editor. It has no consumer counterpart: Chat never had these calls either.
+
 ## Additional reconciliation coverage
 
 - `EndpointPolicyTests`: both consumer defaults and encoded URL behavior.

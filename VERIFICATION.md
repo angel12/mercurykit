@@ -1,6 +1,27 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`). Mercury Chat uses it (angel12/mercurychat#81 and #82), and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`). Mercury Chat uses it (angel12/mercurychat#81 and #82), and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated. `0.2.0` and `0.3.0` are not yet released; the sections below record standalone verification of branches ahead of `0.1.0`, pending each one's own tag.
+
+## Profile editor branch (`feat/profile-editor`)
+
+Run on 2026-09-23, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstream hermes-agent `main` at `520fead094`, read from an exported tree (`git archive`), never a checkout.
+
+### Verified
+
+- `swift test`, from a clean `.build`: **466 tests / 64 suites passed**. This task adds no code or tests; A1–A3 already brought the suite here (453 / 63 on the prior `feat/profiles-create` baseline).
+- `swift build` and `swift build --build-tests`, from a clean `.build`: no warnings.
+- `python3 scripts/check-api-constraints.py`: passed.
+- `actionlint .github/workflows/*.yml`: passed with no findings.
+- Generic iOS Simulator and generic visionOS Simulator `xcodebuild` package builds, unsigned: both succeeded.
+- Param-key audit: `profiles.describe {name}`; `profiles.configure` with `{name, soul}`, the maximal shape (`name`, `soul`, `description`, `model`, `provider`, `confirm_expensive_model`, `disabled_skills`, `enabled_toolsets`, `enabled_mcp_servers`), `{name, enabled_mcp_servers: []}` and `{name, soul, disabled_skills: []}`; and `model.options {profile}` all pass `tui_gateway.contracts.registry.validate_params` at `520fead094`.
+- Result-shape audit: the test fixtures `described`, `appliedAll`, the confirm reply (`aGuardedModelAsksForConfirmation`) and the `{"ok": false, ...}` reply (`aFailedSectionIsReported`) validate against `ProfilesDescribeResult` / `ProfilesConfigureResult`. `inventory`, with its one deliberately invalid provider row (`{"name": "no slug, skipped"}`) removed, validates against `ModelOptionsResult`. That row exists in the test fixture to prove the kit skips provider rows without a `slug`, by design: `ModelOptionsResult.providers[].slug` is required by the contract (confirmed by re-validating the fixture with the row left in, which fails with `providers.2.slug: Field required`), so a row without one is not a valid provider and the kit is right to drop it rather than surface it.
+- Upstream drift `16fe260aab..520fead094` (8 commits, all `fix(desktop)`/`fix(agent)`, no contract changes): the JSON schemas of all 62 contracts the kit uses (every method, event and server request named in `Sources/`, now including `profiles.describe` and `model.options` added by A1–A3) are unchanged. No methods, events or server requests were added or removed upstream in this range, so there is nothing new the kit doesn't use to report.
+- A2 mutation check (from the A2 report, `.superpowers/sdd/2026-09-23-bot-advanced-editor/task-A2-report.md`): dropping empty-array handling in `ProfileChanges.params(name:)` fails `anEmptyListIsSent` and `everySectionMapsToItsDeclaredKey`; returning an empty `failedSections` fails `aFailedSectionIsReported`. Both mutations were reverted and the suite re-passed.
+
+### Not run or pending
+
+- No live-backend call (left to Chat's advanced-editor PR).
+- Hosted CI, review, and the `0.3.0` tag.
 
 ## Profile creation branch (`feat/profiles-create`)
 
