@@ -24,6 +24,15 @@ Endpoint inference is caller-owned: `ServerEndpoint.parse(_:)` defaults to `.htt
 
 The package and module are named `MercuryKit`; protocol-facing `Hermes*` type names intentionally remain unchanged.
 
+## Hermes desktop contract 7
+
+Since contract 7, blocking prompts are JSON-RPC requests from the server (`ServerRequest`, ids `srq-<hex>`), and a socket must advertise `client.capabilities {server_requests: true}` or they are cancelled server-side. This is a per-app switch, `ServerRequestPolicy`, passed to `HermesConnection`. It defaults to `.disabled`, which behaves exactly like the contract-6 client: nothing is advertised and request frames are ignored.
+
+- `.chat` answers approval, clarify, sudo and secret; `.voice` answers approval and clarify. Answerable requests arrive on the event stream as `GatewayEvent.Kind.serverRequest`, in wire order. They are answered with `answerServerRequest(id:result:)` and `ServerRequestResult`, and withdrawn by `request.cancel` (`ServerRequestCancel`). After a reconnect they are restored from `openRequests`, which takes priority over `pending_*`.
+- A request the app can't answer is left for another attached client by default, because the first response settles a request for every client. `.refuse` is an opt-in. An answerable request that can't be decoded is always refused, so the agent never waits on it.
+- Each app states the backend contract it needs with `DesktopContractRequirement`. `GatewayClient.builtAgainstDesktopContract` stays at 6 and is deprecated.
+- Retry orchestration for 4007 and 4009 (resubmit after reconnect) stays in the apps. `HermesError` only classifies the codes.
+
 ## Source provenance
 
 - Mercury Chat: `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d` (angel12/mercurychat `main`; adds `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)

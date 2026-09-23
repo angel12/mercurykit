@@ -55,6 +55,30 @@ Baseline `3792ac146e0299c17295f928661b7339bb625510`; source directory `Packages/
 | `ServerEndpointTests.swift` | Combined | EndpointPolicyTests.swift + ServerEndpointTests.swift + JSONValueTests.swift — explicit Voice scheme policy, Chat default retained; exact integer checks shared |
 | `SessionUsageDecodingTests.swift` | Moved/adapted | UnionSessionUsageDecodingTests.swift |
 
+## mercury-voice PR #126 (contract 7)
+
+Merged at `b403c5e19dbfbefdc8109ad403864413571d9c32`; kit diff `3792ac1..b403c5e` under `Packages/MercuryVoiceCore/Tests/HermesKitTests/`. Destinations below are under `Tests/MercuryKitTests/`.
+
+| Source file | Classification | Destination / rationale |
+|---|---|---|
+| `CapabilityAdvertisementTests.swift` (new) | Moved/adapted | TransportUnionCapabilityAdvertisementTests.swift — runs with an explicit `ServerRequestPolicy` (the kit default is off); adds the switch-off path, the default auto-answer and per-socket replies |
+| `ServerRequestRoutingTests.swift` (new) | Moved/adapted | TransportUnionServerRequestRoutingTests.swift — per-app answerable set; adds Chat's sudo/secret routing, wire-order preservation, the disabled path, the opt-in `.refuse` option and refusal of malformed routed requests |
+| `ServerRequestAnswerTests.swift` (new) | Replaced | ServerRequestAnswerTests.swift — Voice's `ServerRequestAnswer` enum is not ported: `answerServerRequest` returns `PromptResponseStatus`, and the "unknown status → answered" case is inverted to "throws". Exercised through `HermesConnection` over `LocalGatewayServer`; adds result builders, `clarify.lock` and `connection.respond` |
+| `TTSLeaseTests.swift` (new) | Moved/adapted | TTSLeaseTests.swift — kit spelling `ttsLease(name:active:profile:)`; adds a two-argument call with a swallowed 500 |
+| `LoopbackGatewayServer.swift` (+137) | Moved test helper, adapted | TransportUnionLoopbackGatewayServer.swift — client-frame parsing, auto-answered `client.capabilities`, opt-out and `answerCapabilities(asError:)`; replies go only to the socket that asked (Voice broadcasts) |
+| `PendingPromptDecodingTests.swift` (+99) | Moved/adapted | UnionPendingPromptDecodingTests.swift — batch questions are `ClarifyRequest.Question`; decoding is stricter (required `request_id`, qid, question and field types); sudo/secret server-request cases added |
+| `LiveSessionSnapshotTests.swift` (+42) | Moved/adapted | UnionLiveSessionSnapshotTests.swift — plus `null` refusal, the `pending_approval` duplicate case and `SessionHandle.openRequests` |
+| `RPCErrorReasonTests.swift` (+29) | Moved/adapted | TransportUnionRPCErrorReasonTests.swift — plus 4000, 4064 and 5035 |
+| `ReconnectVoiceDecodingTests.swift` (+111) | Moved | UnionReconnectVoiceDecodingTests.swift (suite `UnionVoiceClientConfigDecodingTests`), verbatim; plus fractional values and relay-verdict cases |
+| `VoiceEngineTests/DirectSpeechCompositionTests.swift`, `VoiceEngineTests/DirectVoiceTests.swift` | Retained in consumer | Audio-engine use of `min_len`, `extra_body` and `timeout_s` stays in Voice's VoiceEngine |
+| `MercuryVoiceTests/*` (R32–R34, TTS lease controller, conversation support) | Retained in consumer | Prompt presentation, dedupe, 4007/4009 resubmit and lease lifecycle are app behaviour |
+
+Kit-only changes for the same work: `TransportUnionPolicyTests.swift` (the fake accepts `client.capabilities`; switch-off, advertisement, contract-6 refusal, handshake-drop give-up and 5035 cases), `TransportUnionConnectionRestartTests.swift` (every case also runs with the handshake on), `UnionSessionPolicyTests.swift` (redirect/steer statuses, desktop contract requirement), `ModelsTests.swift` (tool calls, project object), `VoiceAPICompletenessTests.swift` and `Fixtures/ExternalConsumer.swift` (contract-7 public API).
+
+## mercury (Chat) after the baseline
+
+`70633d3..44abd62` adds `ToolCallRef` / `TranscriptMessage.toolCalls` (issue #76). Its tests live in `ChatCoreTests/TranscriptStoreTests.swift` and stay in Chat; the kit decoding is covered by `ModelsTests.swift` (`TranscriptMessageTests`).
+
 ## Additional reconciliation coverage
 
 - `EndpointPolicyTests`: both consumer defaults and encoded URL behavior.
