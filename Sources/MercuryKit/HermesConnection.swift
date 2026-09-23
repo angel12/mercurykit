@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Product-owned retry behavior; only one stop rule applies at a time.
 public struct ReconnectPolicy: Sendable, Equatable {
@@ -25,6 +26,11 @@ public struct ReconnectPolicy: Sendable, Equatable {
 /// the cue to re-`session.resume` by **stored** id (runtime ids are recycled
 /// across backend restarts).
 public actor HermesConnection {
+    private static let logger = Logger(subsystem: "MercuryKit", category: "HermesConnection")
+    /// How long a new socket waits for the `client.capabilities` reply
+    /// before it is reported ready anyway.
+    static let capabilitiesTimeout: TimeInterval = 5
+
     public enum Phase: Sendable, Equatable {
         case disconnected(reason: String?)
         case connecting(attempt: Int)
@@ -55,6 +61,15 @@ public actor HermesConnection {
     public nonisolated let rest: HermesRESTClient
 
     public private(set) var phase: Phase = .stopped
+    /// This app's contract-7 switch (see `ServerRequestPolicy`).
+    public nonisolated let serverRequestPolicy: ServerRequestPolicy
+    /// The server→client request methods the backend said it may send, from
+    /// the current socket's `client.capabilities` reply. Nil while not
+    /// ready, when the policy is disabled, or when the advertisement failed
+    /// (a contract-6 backend answers -32601; a timeout or transport error is
+    /// logged). On a contract ≥ 7 backend a nil here while ready means
+    /// prompts on this socket may be auto-skipped server-side.
+    public private(set) var serverRequestMethods: Set<String>?
     private var gateway: (any GatewayDialing)?
     private var supervisor: Task<Void, Never>?
     private var supervisorLifetime: UUID?
@@ -66,7 +81,7 @@ public actor HermesConnection {
     /// Internal scheduling seam. Nil in shipping initializers; tests delay
     /// existing suspension boundaries without replacing gateway behavior.
     enum SupervisorCheckpoint: Sendable {
-        case connected, connectFailed, eventsSubscribed, eventReceived, eventsEnded
+        case connected, connectFailed, eventsSubscribed, capabilitiesAnswered, eventReceived, eventsEnded
         case closeCauseRead, closeReasonRead, finished
     }
     private let supervisorCheckpoint: (@Sendable (SupervisorCheckpoint) async -> Void)?
@@ -78,27 +93,37 @@ public actor HermesConnection {
     private let sleeper: @Sendable (TimeInterval) async -> Void
     private let makeClient: @Sendable (ServerEndpoint, HermesAuthenticator) -> any GatewayDialing
 
+    /// `serverRequestPolicy` is the contract-7 switch: `.disabled` (the
+    /// default) keeps contract-6 behaviour exactly; any other policy
+    /// advertises `client.capabilities` on every socket and routes the
+    /// requests it names (see `ServerRequestPolicy`).
     public init(endpoint: ServerEndpoint, authenticator: HermesAuthenticator,
-                reconnectPolicy: ReconnectPolicy = .chat) {
+                reconnectPolicy: ReconnectPolicy = .chat,
+                serverRequestPolicy: ServerRequestPolicy = .disabled) {
         self.init(endpoint: endpoint, authenticator: authenticator,
-                  reconnectPolicy: reconnectPolicy, supervisorCheckpoint: nil)
+                  reconnectPolicy: reconnectPolicy, serverRequestPolicy: serverRequestPolicy,
+                  supervisorCheckpoint: nil)
     }
 
+    /// `makeClient` defaults to a `GatewayClient` built with
+    /// `serverRequestPolicy`; an injected dialer does its own routing.
     init(endpoint: ServerEndpoint, authenticator: HermesAuthenticator,
          reconnectPolicy: ReconnectPolicy = .chat,
+         serverRequestPolicy: ServerRequestPolicy = .disabled,
          supervisorCheckpoint: (@Sendable (SupervisorCheckpoint) async -> Void)?,
          backoffDelay: TimeInterval? = nil,
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          sleeper: @escaping @Sendable (TimeInterval) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
-         makeClient: @escaping @Sendable (ServerEndpoint, HermesAuthenticator) -> any GatewayDialing = {
-             GatewayClient(endpoint: $0, authenticator: $1)
-         }) {
+         makeClient: (@Sendable (ServerEndpoint, HermesAuthenticator) -> any GatewayDialing)? = nil) {
         self.supervisorCheckpoint = supervisorCheckpoint
         self.backoffDelay = backoffDelay
         self.reconnectPolicy = reconnectPolicy
+        self.serverRequestPolicy = serverRequestPolicy
         self.now = now
         self.sleeper = sleeper
-        self.makeClient = makeClient
+        self.makeClient = makeClient ?? {
+            GatewayClient(endpoint: $0, authenticator: $1, serverRequestPolicy: serverRequestPolicy)
+        }
         self.endpoint = endpoint
         self.authenticator = authenticator
         self.rest = HermesRESTClient(endpoint: endpoint, authenticator: authenticator)
@@ -115,11 +140,13 @@ public actor HermesConnection {
                   supervisorCheckpoint: nil, now: now, sleeper: sleeper, makeClient: makeClient)
     }
 
-    public init(endpoint: ServerEndpoint, token: String?, reconnectPolicy: ReconnectPolicy = .chat) {
+    public init(endpoint: ServerEndpoint, token: String?, reconnectPolicy: ReconnectPolicy = .chat,
+                serverRequestPolicy: ServerRequestPolicy = .disabled) {
         self.init(endpoint: endpoint,
                   authenticator: HermesAuthenticator(endpoint: endpoint,
                       credentials: token.map { .sessionToken($0) }),
-                  reconnectPolicy: reconnectPolicy)
+                  reconnectPolicy: reconnectPolicy,
+                  serverRequestPolicy: serverRequestPolicy)
     }
 
     // MARK: Subscriptions
@@ -166,6 +193,7 @@ public actor HermesConnection {
         reconnectPoke = nil
         let gateway = gateway
         self.gateway = nil
+        serverRequestMethods = nil
         Task { await gateway?.close(reason: "stopped") }
         publish(.phase(.stopped))
     }
@@ -301,17 +329,71 @@ public actor HermesConnection {
                 return
             }
 
-            gateway = client
-            failedDials = 0
-            failingSince = nil
-            attempt = 0
-            publish(.phase(.ready(isReconnect: everConnected)))
-            everConnected = true
+            let events: AsyncStream<GatewayEvent>
+            if serverRequestPolicy.isEnabled {
+                // Contract ≥ 7: a socket that never advertises gets every
+                // prompt cancelled server-side (hermes-agent f9d178f78e), and
+                // the advertisement is forgotten on disconnect, so each new
+                // socket sends it before anyone is told it is ready — the app
+                // answers ready with session.resume, and a late advertisement
+                // would race that session's first prompt. Subscribe first:
+                // GatewayClient does not buffer for a subscriber that is not
+                // registered yet, and the server may push while we wait.
+                events = await client.events()
+                if let supervisorCheckpoint { await supervisorCheckpoint(.eventsSubscribed) }
+                let methods = await advertiseServerRequests(on: client)
+                if let supervisorCheckpoint { await supervisorCheckpoint(.capabilitiesAnswered) }
+                if !ownsSupervisor(lifetime) {
+                    await client.close(reason: "stopped")
+                    return
+                }
+                if await client.state != .ready {
+                    // The socket died during the handshake: never report it
+                    // ready. It counts as a failed dial, so a server that
+                    // keeps dropping here still reaches the give-up rule
+                    // (mercury-voice #126 reset the counters first and could
+                    // retry forever).
+                    let cause = await client.closeCause
+                    let reason = await closeReason(of: client)
+                    await client.close(reason: nil)
+                    guard ownsSupervisor(lifetime) else { return }
+                    if cause == .unauthorized {
+                        publish(.phase(.authExpired))
+                        supervisor = nil
+                        return
+                    }
+                    if cause == .forbidden {
+                        publish(.phase(.refused(reason: reason)))
+                        supervisor = nil
+                        return
+                    }
+                    failedDials += 1
+                    if giveUp(failingSince: &failingSince, failedDials: failedDials, reason: reason) { return }
+                    publish(.phase(.disconnected(reason: reason)))
+                    attempt += 1
+                    await backoff(attempt: attempt, lifetime: lifetime)
+                    continue
+                }
+                gateway = client
+                serverRequestMethods = methods
+                failedDials = 0
+                failingSince = nil
+                attempt = 0
+                publish(.phase(.ready(isReconnect: everConnected)))
+                everConnected = true
+            } else {
+                gateway = client
+                failedDials = 0
+                failingSince = nil
+                attempt = 0
+                publish(.phase(.ready(isReconnect: everConnected)))
+                everConnected = true
+                events = await client.events()
+                if let supervisorCheckpoint { await supervisorCheckpoint(.eventsSubscribed) }
+            }
 
             // Pump this socket generation's events into the stable stream;
             // the event stream finishing is the disconnect signal.
-            let events = await client.events()
-            if let supervisorCheckpoint { await supervisorCheckpoint(.eventsSubscribed) }
             for await event in events {
                 if let supervisorCheckpoint { await supervisorCheckpoint(.eventReceived) }
                 if !ownsSupervisor(lifetime) { break }
@@ -326,6 +408,7 @@ public actor HermesConnection {
                 return
             }
             gateway = nil
+            serverRequestMethods = nil
 
             let cause = await client.closeCause
             if let supervisorCheckpoint { await supervisorCheckpoint(.closeCauseRead) }
@@ -358,6 +441,30 @@ public actor HermesConnection {
             attempt += 1
             await backoff(attempt: attempt, lifetime: lifetime)
         }
+    }
+
+    /// `client.capabilities {server_requests: true}` on a fresh socket.
+    /// Returns the methods the backend may send, or nil when it did not
+    /// accept the advertisement. Never throws: a contract-6 backend answers
+    /// -32601 and the socket is still usable, and a timeout or transport
+    /// error leaves the caller to check whether the socket survived.
+    private func advertiseServerRequests(on client: any GatewayDialing) async -> Set<String>? {
+        do {
+            let result = try await client.request(
+                "client.capabilities", params: .object(["server_requests": .bool(true)]),
+                timeout: Self.capabilitiesTimeout)
+            return Set(result["server_requests"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+        } catch is CancellationError {
+            // stop() cancelled the supervisor; the caller sees it next.
+        } catch HermesError.rpcError(let code, _, _) where code == HermesError.RPCCode.methodNotFound {
+            Self.logger.info("client.capabilities unsupported: a contract-6 backend, prompts stay events")
+        } catch {
+            let reason = (error as? HermesError)?.errorDescription ?? "\(error)"
+            Self.logger.error(
+                "client.capabilities failed (\(reason, privacy: .public)); a contract ≥ 7 backend may auto-skip prompts on this socket"
+            )
+        }
+        return nil
     }
 
     private func giveUp(failingSince: inout TimeInterval?, failedDials: Int, reason: String?) -> Bool {

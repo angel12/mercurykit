@@ -2,6 +2,8 @@ import CryptoKit
 import Foundation
 import Network
 
+@testable import MercuryKit
+
 /// A real WebSocket gateway on 127.0.0.1 with an OS-assigned port, so
 /// `GatewayClient` is exercised over an actual `URLSessionWebSocketTask`
 /// against actual bytes.
@@ -25,8 +27,18 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
     /// like (no status code ever reaches the client).
     private let dropsUpgrade: Bool
     private let onOpen: @Sendable (TransportUnionLoopbackGatewayServer) -> Void
+    /// False holds back every `client.capabilities` reply until a test fires
+    /// it with `answerCapabilities(asError:)`, to pin down its ordering
+    /// against `.phase(.ready)`. True (the default) answers at once, so a
+    /// connection test against a policy that advertises never waits out the
+    /// supervisor's 5 s capabilities timeout.
+    private let autoAnswersCapabilities: Bool
     private var peers: [ObjectIdentifier: Peer] = [:]
     private var _upgradeAttempts = 0
+    private var _receivedFrames: [JSONValue] = []
+    /// Held `client.capabilities` requests, oldest first: the request id and
+    /// the socket it arrived on, so the reply goes back to that socket only.
+    private var _pendingCapabilities: [(id: Int, peer: ObjectIdentifier)] = []
     private(set) var port: UInt16 = 0
 
     /// One accepted TCP connection: its socket, its unparsed bytes, and
@@ -47,6 +59,7 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
     static func start(
         refuseUpgradeWith: Int? = nil,
         dropsUpgrade: Bool = false,
+        autoAnswersCapabilities: Bool = true,
         onOpen: @escaping @Sendable (TransportUnionLoopbackGatewayServer) -> Void = { server in
             server.sendEvent(type: "gateway.ready")
         }
@@ -57,7 +70,8 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         let listener = try NWListener(using: parameters)
         let server = TransportUnionLoopbackGatewayServer(
             listener: listener, refuseUpgradeWith: refuseUpgradeWith,
-            dropsUpgrade: dropsUpgrade, onOpen: onOpen)
+            dropsUpgrade: dropsUpgrade, autoAnswersCapabilities: autoAnswersCapabilities,
+            onOpen: onOpen)
         try await server.waitUntilReady()
         return server
     }
@@ -66,11 +80,13 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         listener: NWListener,
         refuseUpgradeWith: Int?,
         dropsUpgrade: Bool,
+        autoAnswersCapabilities: Bool,
         onOpen: @escaping @Sendable (TransportUnionLoopbackGatewayServer) -> Void
     ) {
         self.listener = listener
         self.refuseUpgradeWith = refuseUpgradeWith
         self.dropsUpgrade = dropsUpgrade
+        self.autoAnswersCapabilities = autoAnswersCapabilities
         self.onOpen = onOpen
         // Installed before start(): a started NWListener without a
         // newConnectionHandler fails with EINVAL.
@@ -133,7 +149,10 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
     private func drain(_ connection: NWConnection) {
         let key = ObjectIdentifier(connection)
         let needsHandshake = lock.withLock { peers[key].map { !$0.handshaken } ?? false }
-        guard needsHandshake else { return }  // client frames are ignored
+        guard needsHandshake else {
+            handleClientFrames(connection)
+            return
+        }
         guard let response = lock.withLock({ takeHandshakeLocked(key) }) else { return }
         if dropsUpgrade {
             drop(connection)
@@ -151,6 +170,7 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         }
         connection.send(content: response, isComplete: true, completion: .idempotent)
         onOpen(self)
+        handleClientFrames(connection)
     }
 
     /// Consume the HTTP upgrade head and return the response bytes — 101 for
@@ -187,9 +207,110 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
                 + "Connection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n").utf8)
     }
 
+    // MARK: Client → server
+
+    /// Every text frame the clients have sent, decoded, in arrival order.
+    var receivedFrames: [JSONValue] { lock.withLock { _receivedFrames } }
+
+    /// The JSON-RPC `method` of every frame the clients have sent.
+    var receivedMethods: [String] { receivedFrames.compactMap { $0["method"]?.stringValue } }
+
+    /// Parse the complete client frames buffered for `connection`. Only
+    /// `client.capabilities` is answered; nothing else here needs a generic
+    /// RPC dispatcher. Recording a frame and holding its capabilities id
+    /// share one lock acquisition, so a fast `answerCapabilities()` can
+    /// never find the frame recorded but its id not yet held.
+    private func handleClientFrames(_ connection: NWConnection) {
+        let key = ObjectIdentifier(connection)
+        while true {
+            let taken: (opcode: UInt8, payload: Data)? = lock.withLock {
+                guard let peer = peers[key], let frame = Self.takeFrame(peer.pending) else {
+                    return nil
+                }
+                peer.pending.removeSubrange(..<frame.consumed)
+                return (frame.opcode, frame.payload)
+            }
+            guard let taken else { return }
+            // Text only; a close or control frame carries no request.
+            guard taken.opcode == 0x1,
+                let frame = try? JSONDecoder().decode(JSONValue.self, from: taken.payload)
+            else { continue }
+            let capabilitiesID =
+                frame["method"]?.stringValue == "client.capabilities" ? frame["id"]?.intValue : nil
+            lock.withLock {
+                _receivedFrames.append(frame)
+                if let capabilitiesID, !autoAnswersCapabilities {
+                    _pendingCapabilities.append((capabilitiesID, key))
+                }
+            }
+            if let capabilitiesID, autoAnswersCapabilities {
+                reply(to: connection, id: capabilitiesID, asError: false)
+            }
+        }
+    }
+
+    /// Answer the oldest held `client.capabilities` request, on the socket
+    /// that sent it. `asError` replies -32601, as a contract-6 backend does.
+    /// False when nothing is held.
+    @discardableResult
+    func answerCapabilities(asError: Bool = false) -> Bool {
+        let held: (id: Int, connection: NWConnection)? = lock.withLock {
+            while !_pendingCapabilities.isEmpty {
+                let next = _pendingCapabilities.removeFirst()
+                if let peer = peers[next.peer] { return (next.id, peer.connection) }
+            }
+            return nil
+        }
+        guard let held else { return false }
+        reply(to: held.connection, id: held.id, asError: asError)
+        return true
+    }
+
+    private func reply(to connection: NWConnection, id: Int, asError: Bool) {
+        let text =
+            asError
+            ? #"{"jsonrpc":"2.0","id":\#(id),"error":{"code":-32601,"message":"unknown method: client.capabilities"}}"#
+            : #"{"jsonrpc":"2.0","id":\#(id),"result":{"server_requests":["approval","clarify","sudo","secret"]}}"#
+        sendFrame(opcode: 0x1, payload: Data(text.utf8), to: connection)
+    }
+
+    /// One client frame from the front of `bytes`: opcode, unmasked payload
+    /// and the bytes it spans, or nil while it is not fully buffered. Client
+    /// frames are masked (RFC 6455 §5.3); unfragmented frames only, which is
+    /// all a small JSON-RPC request produces.
+    private static func takeFrame(_ bytes: [UInt8]) -> (opcode: UInt8, payload: Data, consumed: Int)? {
+        guard bytes.count >= 2 else { return nil }
+        let opcode = bytes[0] & 0x0F
+        let masked = bytes[1] & 0x80 != 0
+        var length = Int(bytes[1] & 0x7F)
+        var offset = 2
+        if length == 126 {
+            guard bytes.count >= offset + 2 else { return nil }
+            length = Int(bytes[offset]) << 8 | Int(bytes[offset + 1])
+            offset += 2
+        } else if length == 127 {
+            guard bytes.count >= offset + 8 else { return nil }
+            length = bytes[offset..<offset + 8].reduce(0) { $0 << 8 | Int($1) }
+            offset += 8
+        }
+        var mask: [UInt8] = []
+        if masked {
+            guard bytes.count >= offset + 4 else { return nil }
+            mask = Array(bytes[offset..<offset + 4])
+            offset += 4
+        }
+        guard bytes.count >= offset + length else { return nil }
+        var payload = Array(bytes[offset..<offset + length])
+        if masked {
+            for index in payload.indices { payload[index] ^= mask[index % 4] }
+        }
+        return (opcode, Data(payload), offset + length)
+    }
+
     // MARK: Server → client
 
-    private func sendFrame(opcode: UInt8, payload: Data) {
+    /// To every handshaken peer, or to `target` alone.
+    private func sendFrame(opcode: UInt8, payload: Data, to target: NWConnection? = nil) {
         var frame = Data([0x80 | opcode])
         if payload.count < 126 {
             frame.append(UInt8(payload.count))
@@ -205,7 +326,10 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         }
         frame.append(payload)
         // Never hold the lock across a send.
-        let live = lock.withLock { peers.values.filter(\.handshaken).map(\.connection) }
+        let live = lock.withLock {
+            peers.values.filter { $0.handshaken && (target == nil || $0.connection === target) }
+                .map(\.connection)
+        }
         for connection in live {
             connection.send(content: frame, isComplete: true, completion: .idempotent)
         }
@@ -225,6 +349,17 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
     /// Server-initiated close carrying an application close code (4401/4403).
     func close(code: UInt16) {
         sendFrame(opcode: 0x8, payload: Data([UInt8(code >> 8), UInt8(code & 0xFF)]))
+    }
+
+    /// Kill every open peer without stopping the listener: a transport loss
+    /// mid-flight, with a request the client awaits still outstanding.
+    func dropConnections() {
+        let open = lock.withLock {
+            let open = peers.values.map(\.connection)
+            peers = [:]
+            return open
+        }
+        for connection in open { connection.cancel() }
     }
 
     func stop() {
