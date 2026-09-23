@@ -27,6 +27,11 @@ public enum BotModeSupport {
 /// A compact session reference on a `profiles.list` row: the profile's
 /// canonical "Bot Chat" (`canonical_session`) or its newest human-facing
 /// conversation (`last_session`).
+///
+/// Deliberately separate from `SessionSummary`, as upstream separates them:
+/// the desktop's `CanonicalSession` / `SessionPreview` (hermes-bots plugin
+/// types) versus `SessionInfo`, and `ProfileCanonicalSession` /
+/// `ProfileSessionPreview` versus `SessionListRow` in the wire contracts.
 public struct BotSessionStub: Sendable, Equatable, Hashable {
     /// Durable registry row id — what the roster identifies the chat by.
     public var storedID: String
@@ -65,6 +70,9 @@ public struct BotSessionStub: Sendable, Equatable, Hashable {
 /// `apps/desktop/src/plugins/hermes-bots/data.ts`. The wire shape is
 /// `ProfileRow` in `tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py`
 /// (checked at upstream `9fe737aef2`).
+///
+/// Deliberately separate from `ProfileInfo` (REST `/api/profiles`), as the
+/// desktop keeps the plugin's `RosterRow` apart from its `ProfileInfo`.
 public struct BotSummary: Sendable, Equatable, Hashable, Identifiable {
     /// The profile's `ui_meta` key owned by the desktop hermes-bots plugin.
     static let uiMetaKey = "hermes-bots"
