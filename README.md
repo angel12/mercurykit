@@ -2,7 +2,7 @@
 
 Shared Swift protocol client for Mercury Chat and Mercury Voice, connecting to Hermes Agent.
 
-**Status:** standalone reconciliation in progress. Neither consumer has migrated. This package is not yet released or verified for adoption.
+**Status:** released as `0.1.0`. Neither consumer has migrated yet, and the package is not yet verified in either app or against a live backend. Mercury Chat's migration is planned in angel12/mercurychat#27.
 
 ## Platforms
 
@@ -14,7 +14,7 @@ Swift 6; iOS 17+, macOS 14+, visionOS 2+. Apple networking and Keychain APIs req
 swift test
 ```
 
-The GitHub Actions workflow runs this suite on standard hosted macOS. Hosted execution remains pending publication.
+The GitHub Actions workflow runs this suite and `scripts/check-api-constraints.py` on GitHub-hosted macOS (`macos-15`) for every pull request to `main` and every push to it. VERIFICATION.md records the runs.
 
 ## Boundaries
 
