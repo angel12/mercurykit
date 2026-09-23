@@ -526,6 +526,9 @@ public actor GatewayClient: GatewayDialing {
             for sub in subscribers.values { sub.yield(event) }
             return
         }
+        // Not answerable by this app. Any response settles the request for
+        // every attached client, so only `.refuse` (an app that is sure it
+        // is alone) replies; see `ServerRequestPolicy.Unanswerable`.
         switch serverRequestPolicy.unanswerable {
         case .leaveForOtherClients:
             Self.logger.debug(

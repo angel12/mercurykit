@@ -117,25 +117,83 @@ public struct ServerRequest: Sendable, Equatable {
 /// listening, the server keeps waiting and the next resume restores it from
 /// `open_requests`.
 public struct ServerRequestPolicy: Sendable, Equatable {
-    /// What to do with a request whose method the app does not answer.
+    /// What to do with a request whose method is not in `answerableMethods`
+    /// — for Chat and Voice that is every desktop-only request the backend
+    /// may send: `vault.unlock_prompt`, `vault.save_login`, `vault.code`,
+    /// `terminal.read`, `preview.read`, `preview.act`, `window.read` and
+    /// `tour`, plus `sudo` and `secret` for Voice. The backend's full list
+    /// for a socket is `HermesConnection.serverRequestMethods`.
+    ///
+    /// ## Why there is a choice
     ///
     /// Upstream fans each request frame out to every client attached to the
     /// session, and the first response for an id settles it for all of them
-    /// (`server_requests.resolve_response`), error replies included. So a
-    /// refusal from this client takes the prompt away from a co-attached
-    /// client (the desktop) that could have answered it.
+    /// (`server_requests.resolve_response`), error replies included. The two
+    /// options trade one failure for the other:
+    ///
+    /// | | Another client attached (e.g. the desktop) | This app is the only client |
+    /// |---|---|---|
+    /// | `.leaveForOtherClients` | That client answers it normally. | The agent blocks until the request's server-side deadline (300 s for most prompts; the tour probe 10 s), then continues as if skipped. |
+    /// | `.refuse` | The prompt is taken away from that client before the user can answer it there. | The agent continues at once as if skipped. |
+    ///
+    /// "As if skipped" is the backend's handling of a request that got no
+    /// result: a one-string prompt (`vault.*`, GUI reads, `tour`, `sudo`,
+    /// `secret`) resolves to `""` (declined or unavailable), a clarify to
+    /// an empty answer (skipped), and an approval is withdrawn, so its
+    /// command is cancelled rather than denied.
+    ///
+    /// ## What `unanswerable` does not affect
+    ///
+    /// - `.disabled` never refuses anything: request frames are ignored.
+    /// - An *answerable* request that cannot be decoded (no `session_id`,
+    ///   non-object `params`, a batch clarify that fails to decode, …) is
+    ///   always refused with `-32602`, whatever this is set to. The app said
+    ///   it answers that method, so no other client is being relied on, and
+    ///   leaving it would make the agent wait for a card nobody shows.
+    /// - `open_requests` replayed on reconnect are never refused by the
+    ///   kit; the app decides what to do with entries it cannot answer.
     public enum Unanswerable: Sendable, Equatable {
-        /// Leave it unanswered for another client. If this is the only
-        /// client, the agent waits out the server-side deadline.
+        /// Default. Send nothing and let another attached client answer.
+        /// The request is logged at debug level only. Choose this unless you
+        /// are sure no other client shares the app's sessions: it is the
+        /// only option that never takes a prompt away from the desktop.
         case leaveForOtherClients
-        /// Reply `-32601` at once. Right only for an app that knows it is
-        /// the sole client of its sessions.
+        /// Answer at once with a JSON-RPC error response: `-32601` and the
+        /// message `"<method> is not handled by this client"` (it names the
+        /// method, never the app), sent on the socket the request arrived
+        /// on. The agent then continues immediately instead of waiting out
+        /// the deadline.
+        ///
+        /// Choose it only when the app knows it is the sole client of its
+        /// sessions, for example against a backend no desktop connects to.
+        /// Upstream's `client.capabilities` contract describes this reply
+        /// as the expected behaviour for a client with no handler, but that
+        /// assumes the refusing client is the only one attached.
+        ///
+        /// ```swift
+        /// let policy = ServerRequestPolicy(
+        ///     answerableMethods: ServerRequestPolicy.voice.answerableMethods,
+        ///     unanswerable: .refuse)
+        /// let connection = HermesConnection(
+        ///     endpoint: endpoint, authenticator: authenticator,
+        ///     reconnectPolicy: .voice, serverRequestPolicy: policy)
+        /// ```
         case refuse
     }
 
+    /// The request methods this app shows and answers. Empty disables the
+    /// contract-7 switch entirely (see `.disabled`).
     public var answerableMethods: Set<String>
+    /// What happens to every other request method. Defaults to
+    /// `.leaveForOtherClients`; see `Unanswerable` before choosing
+    /// `.refuse`.
     public var unanswerable: Unanswerable
 
+    /// - Parameters:
+    ///   - answerableMethods: the methods this app answers, e.g.
+    ///     `ServerRequestPolicy.chat.answerableMethods`.
+    ///   - unanswerable: what to do with any other method. Leave the default
+    ///     unless the app is certain to be the only client of its sessions.
     public init(answerableMethods: Set<String>, unanswerable: Unanswerable = .leaveForOtherClients) {
         self.answerableMethods = answerableMethods
         self.unanswerable = unanswerable
