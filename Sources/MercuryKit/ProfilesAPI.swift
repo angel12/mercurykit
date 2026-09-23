@@ -354,6 +354,118 @@ extension HermesConnection {
         }
     }
 
+    /// The Bot Mode roster: every profile with its `ui_meta['hermes-bots']`
+    /// presentation, latest-conversation preview, and server-resolved
+    /// canonical Bot Chat. The session walk makes this the expensive form —
+    /// callers should cache and refresh, not poll.
+    public func listBots(timeout: TimeInterval = 60) async throws -> [BotSummary] {
+        let result = try await request(
+            "profiles.list",
+            params: .object(["include_sessions": .bool(true)]),
+            timeout: timeout)
+        return result["profiles"]?.arrayValue?.compactMap(BotSummary.init(json:)) ?? []
+    }
+
+    /// Authoritative per-open canonical Bot Chat lookup: `session.list`'s
+    /// exact-title fast path on the bot's profile. The gateway resolves the
+    /// compression lineage to the live tip (`resolved_id`), resurrects
+    /// accidentally-archived canonical rows, and answers `sessions: []` for
+    /// confirmed absence. Hidden rows resolve (canonical chats are born
+    /// hidden on the desktop). Throws on transport/RPC failure — callers
+    /// must fail CLOSED there: a failed registry lookup never reads as
+    /// "no Bot Chat exists", because creating on that misreading is how a
+    /// forever-chat forks.
+    public func findCanonicalBotChat(
+        profile: String, timeout: TimeInterval = 30
+    ) async throws -> BotSessionStub? {
+        let result = try await request(
+            "session.list",
+            params: .object([
+                "profile": .string(profile),
+                "title": .string(BotChatPolicy.canonicalTitle),
+                "include_hidden": .bool(true),
+                "limit": .number(200),
+            ]),
+            timeout: timeout)
+        let rows = result["sessions"]?.arrayValue ?? []
+        return rows.lazy
+            .filter {
+                BotChatPolicy.isCanonicalRow(
+                    rootTitle: $0["root_title"]?.stringValue,
+                    title: $0["title"]?.stringValue)
+            }
+            .compactMap(BotSessionStub.init(json:))
+            .first
+    }
+
+    /// Real context compression for a live session — the RPC behind the
+    /// desktop's `/compact`. (`prompt.submit` treats slash text as an
+    /// ordinary message, so this is the only way to actually compress.)
+    /// Returns the result's `status`: "compressed", "pending" (still running
+    /// server-side; the transcript refreshes when it lands), or a host-owned
+    /// value like "aborted".
+    public func compressSession(
+        sessionID: String, timeout: TimeInterval = 300
+    ) async throws -> String {
+        let result = try await request(
+            "session.compress",
+            params: .object(["session_id": .string(sessionID)]),
+            timeout: timeout)
+        return result["status"]?.stringValue ?? "compressed"
+    }
+
+    /// A profile's avatar image, or nil when the profile has none
+    /// (`found: false`).
+    public func profileAvatar(
+        name: String, timeout: TimeInterval = 30
+    ) async throws -> ProfileAsset? {
+        let result = try await request(
+            "profiles.get_asset",
+            params: .object(["name": .string(name), "asset": .string("avatar")]),
+            timeout: timeout)
+        return ProfileAsset(json: result)
+    }
+
+    /// Store (or clear) a profile's avatar. `dataURL` must be a PNG/JPEG/WebP
+    /// data URL ≤ 2MB — downscale on-device first.
+    public func setProfileAvatar(
+        name: String, dataURL: String?, timeout: TimeInterval = 60
+    ) async throws {
+        var params: [String: JSONValue] = [
+            "name": .string(name), "asset": .string("avatar"),
+        ]
+        if let dataURL {
+            params["data"] = .string(dataURL)
+        } else {
+            params["clear"] = .bool(true)
+        }
+        _ = try await request("profiles.set_asset", params: .object(params), timeout: timeout)
+    }
+
+    /// Write a bot's COMPLETE `ui_meta['hermes-bots']` object. The gateway
+    /// merges ui_meta key-wise at the top level, so `meta` replaces the whole
+    /// namespace — build it by modifying the roster row's `uiMetaRaw`, never
+    /// from scratch. `expectedRevision` (the row's `uiMetaRevision`) arms the
+    /// per-key CAS so a concurrent desktop edit conflicts instead of being
+    /// clobbered; pass nil only when the row reported no revision map.
+    public func configureBotMeta(
+        name: String, meta: JSONValue, expectedRevision: Int?,
+        timeout: TimeInterval = 30
+    ) async throws -> BotMetaWriteOutcome {
+        var params: [String: JSONValue] = [
+            "name": .string(name),
+            "ui_meta": .object([BotSummary.uiMetaKey: meta]),
+        ]
+        if let expectedRevision {
+            params["ui_meta_expected_revisions"] = .object([
+                BotSummary.uiMetaKey: .number(Double(expectedRevision))
+            ])
+        }
+        let result = try await request(
+            "profiles.configure", params: .object(params), timeout: timeout)
+        return Self.metaWriteOutcome(from: result)
+    }
+
     /// Maps a `profiles.configure` result onto the write outcome — split out
     /// so the CAS interpretation is unit-testable.
     ///
@@ -366,5 +478,55 @@ extension HermesConnection {
             return .conflict
         }
         return applied?["ui_meta"]?.truthy == true ? .persisted : .failed
+    }
+
+    // MARK: Routines
+
+    /// A profile's cron jobs (bot routines are named `[bot:<name>] …`).
+    /// Includes paused jobs — excluding them reads as deletion in a toggle
+    /// UI. `scopedToProfile` is false on gateways that ignored the profile
+    /// param; apply `CronJob.belongsToBot` there.
+    public func listCronJobs(
+        profile: String, timeout: TimeInterval = 30
+    ) async throws -> CronJobList {
+        let result = try await request(
+            "cron.manage",
+            params: .object([
+                "action": .string("list"),
+                "include_disabled": .bool(true),
+                "profile": .string(profile),
+            ]),
+            timeout: timeout)
+        return CronJobList(
+            jobs: result["jobs"]?.arrayValue?.compactMap(CronJob.init(json:)) ?? [],
+            scopedToProfile: result["scoped"]?.stringValue == profile)
+    }
+
+    /// Pause or resume one cron job in the profile's store.
+    public func setCronJobEnabled(
+        jobID: String, enabled: Bool, profile: String, timeout: TimeInterval = 30
+    ) async throws {
+        _ = try await request(
+            "cron.manage",
+            params: .object([
+                "action": .string(enabled ? "resume" : "pause"),
+                "name": .string(jobID),
+                "profile": .string(profile),
+            ]),
+            timeout: timeout)
+    }
+
+    /// Permanently remove one cron job from the profile's store.
+    public func removeCronJob(
+        jobID: String, profile: String, timeout: TimeInterval = 30
+    ) async throws {
+        _ = try await request(
+            "cron.manage",
+            params: .object([
+                "action": .string("remove"),
+                "name": .string(jobID),
+                "profile": .string(profile),
+            ]),
+            timeout: timeout)
     }
 }
