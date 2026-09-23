@@ -79,6 +79,12 @@ public enum HermesError: Error, LocalizedError, Sendable {
         public static let sessionBusy = 4009
         /// A `profile` param named a missing or invalid profile.
         public static let profileUnavailable = 4064
+        /// `profiles.create` without a name.
+        public static let profileNameRequired = 4061
+        /// `profiles.create` refused the profile: the name is invalid or
+        /// already taken, or `clone_from` doesn't exist. The message says
+        /// which (`tui_gateway/methods_profiles.py`).
+        public static let profileCreateRejected = 4062
         /// The backend is retiring (cooperative restart); any RPC may get
         /// this. Retry once the connection is ready again.
         public static let backendRetiring = 5035
