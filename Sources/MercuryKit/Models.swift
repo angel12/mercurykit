@@ -213,6 +213,14 @@ public struct SessionHandle: Sendable, Equatable {
         self.raw = result
     }
 
+    /// `open_requests` of a `session.resume` result (contract ≥ 7): the
+    /// server requests still waiting for an answer, `[]` when absent. Nil
+    /// when present but unreadable; then take the prompts from
+    /// `activateSession`, which refuses such a payload outright. Takes
+    /// priority over `pending_approval`/`pending_clarify` (see
+    /// `LiveSessionSnapshot.openRequests`).
+    public var openRequests: [ServerRequest]? { ServerRequest.openRequests(in: raw) }
+
     /// `{id, slug, name, primary_path?}` — the project `session.info`
     /// reports for the session's cwd (`_project_info_for_cwd`).
     public struct ProjectRef: Sendable, Equatable {

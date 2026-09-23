@@ -83,6 +83,40 @@ struct UnionEventReplayDecodingTests {
         try JSONDecoder().decode(JSONValue.self, from: Data(string.utf8))
     }
 
+    // MARK: open_requests (contract ≥ 7 always sends it)
+
+    @Test func replayCarriesOpenRequests() throws {
+        let batch = EventReplayBatch(
+            result: try json(
+                """
+                {"events": [], "latest_seq": 4, "truncated": false, "count": 0, "epoch": "e",
+                 "open_requests": [{"id": "srq-aaaaaaaaaaaa", "method": "clarify",
+                                    "params": {"session_id": "s1", "question": "?"}}]}
+                """))
+        #expect(!batch.malformed)
+        #expect(batch.openRequests.map(\.id) == ["srq-aaaaaaaaaaaa"])
+        #expect(batch.isLossless(under: "e", forSession: "s1", after: 4))
+    }
+
+    @Test func aContract6ReplayHasNoOpenRequests() throws {
+        let batch = EventReplayBatch(
+            result: try json(#"{"events": [], "latest_seq": 4, "truncated": false, "count": 0, "epoch": "e"}"#))
+        #expect(!batch.malformed)
+        #expect(batch.openRequests == [])
+    }
+
+    /// An unreadable `open_requests` makes the batch unusable: replaying it
+    /// would hide a prompt the backend is still waiting on.
+    @Test(arguments: [#""open_requests": {}"#, #""open_requests": [{"method": "approval"}]"#])
+    func anUnreadableOpenRequestsIsMalformed(field: String) throws {
+        let batch = EventReplayBatch(
+            result: try json(
+                #"{"events": [], "latest_seq": 4, "truncated": false, "count": 0, "epoch": "e", \#(field)}"#))
+        #expect(batch.malformed)
+        #expect(batch.openRequests == [])
+        #expect(!batch.isLossless(under: "e", forSession: "s1", after: 4))
+    }
+
     @Test func decodesSeqStampedFrames() throws {
         let batch = EventReplayBatch(
             result: try json(

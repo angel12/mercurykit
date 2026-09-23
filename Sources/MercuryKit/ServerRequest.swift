@@ -51,6 +51,24 @@ public struct ServerRequest: Sendable, Equatable {
         self.init(id: id, method: method, params: snapshot["params"] ?? .object([:]))
     }
 
+    /// The `open_requests` list of a `session.resume` / `session.activate`
+    /// / `session.events.since` result: the server requests still waiting
+    /// for an answer, oldest first. `[]` when the field is absent (a
+    /// contract-6 backend, or nothing open). Nil when it is present but not
+    /// an array, or holds an entry that is not `{id, method, params}`:
+    /// dropping that entry would understate what the backend is waiting on,
+    /// so the caller must treat the list as unknown.
+    public static func openRequests(in result: JSONValue) -> [ServerRequest]? {
+        guard let field = result["open_requests"] else { return [] }
+        guard let entries = field.arrayValue else { return nil }
+        var requests: [ServerRequest] = []
+        for entry in entries {
+            guard let request = ServerRequest(snapshot: entry) else { return nil }
+            requests.append(request)
+        }
+        return requests
+    }
+
     /// The request a `GatewayEvent.Kind.serverRequest` event carries.
     public init?(event: GatewayEvent) {
         guard event.type == GatewayEvent.Kind.serverRequest else { return nil }

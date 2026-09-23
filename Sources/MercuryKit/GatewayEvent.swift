@@ -123,8 +123,14 @@ public struct EventReplayBatch: Sendable, Equatable {
     /// not an array, an entry that is not a decodable event frame, an
     /// unreadable `truncated`, or a `count` disagreeing with the entries
     /// decoded. The frames in hand are then a subset of what was sent — a
-    /// gap, not a replay.
+    /// gap, not a replay. An unreadable `open_requests` counts too.
     public var malformed: Bool
+    /// `open_requests` (contract ≥ 7; always sent there): the server
+    /// requests still open for the session, oldest first. `[]` when absent
+    /// (contract 6) or when `malformed`. Re-deliver them after the replayed
+    /// events, deduplicated by `id`; they take priority over any
+    /// `pending_*` snapshot (see `LiveSessionSnapshot.openRequests`).
+    public var openRequests: [ServerRequest]
 
     public init(result: JSONValue) {
         let entries = result["events"]?.arrayValue
@@ -147,8 +153,11 @@ public struct EventReplayBatch: Sendable, Equatable {
         // entry dropped on the way in. A backend that omits it says nothing,
         // and the per-entry check already covers the drop.
         let countField = result["count"]
+        let openRequests = ServerRequest.openRequests(in: result)
+        self.openRequests = openRequests ?? []
         self.malformed =
             gap == nil
+            || openRequests == nil
             || entries == nil
             || entries?.count != decoded.count
             || (countField != nil && countField?.intValue != decoded.count)
