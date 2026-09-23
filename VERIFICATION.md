@@ -1,6 +1,6 @@
 # Standalone MercuryKit verification
 
-Unpublished candidate. No consumer migration or release is claimed.
+Released as `0.1.0` (`58d303f`). No consumer has migrated yet, and no live-backend or app verification is claimed.
 
 ## Bot Mode parity branch (`feat/bot-mode-parity`)
 
@@ -13,6 +13,8 @@ Run on 2026-09-22, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Refere
 - `python3 scripts/check-api-constraints.py`: passed. `Fixtures/ExternalConsumer.swift` calls every Bot Mode type, property and method without `@testable`, and extends `BotChatPolicy` from outside the module. Making `metaWriteOutcome` internal fails the check (run by hand, then reverted).
 - `actionlint .github/workflows/*.yml`: passed with no findings. The branch does not change the workflows.
 - Generic iOS Simulator and generic visionOS Simulator `xcodebuild` package builds, unsigned: both succeeded with no warnings. These are builds, not simulator execution.
+- Hosted CI on GitHub's `macos-15-arm64` image (release `20260907.0337`) with Xcode 16.4 / Swift 6.1.2, an older toolchain than the local run: **445 tests passed** with no compiler warnings, and `check-api-constraints.py` passed. That was on the pull request (run `35815107162`, `ff33536`) and on `main` after the merge (run `35815259895`, `58d303f`).
+- Published: merged as angel12/mercurykit#2 (`58d303f`) and tagged `0.1.0`.
 - Mutation check, run by hand and then reverted: making `findCanonicalBotChat` swallow request errors into `nil` fails all three fail-closed cases in `BotModeRPCTests`.
 - Cron tool failures: `cron.manage` passes the cron tool's JSON through, so a failure such as an unknown job id arrives as a successful RPC result with `success: false` and `error` (`tool_error` in `tools/cronjob_tools.py`). `listCronJobs`, `setCronJobEnabled` and `removeCronJob` throw `CronManageError` on an explicit `success: false`; a result without `success` (optional in `CronManageResult`) is not a failure. This is a deliberate change from Chat's embedded kit, which returned normally. Before the check was wired in, all four `toolLevelFailureThrows` cases failed. Chat's three call sites already catch and show `errorDescription`, so the app needs no change.
 - `CronJob.displayName` strips the `[bot:<name>]` tag case-insensitively, matching `belongsToBot` and the desktop's `BOT_TAG_RE` (`/i`). Chat's embedded kit only stripped a lowercase `[bot:`, so `[Bot:x] y` belonged to bot x but displayed with its tag.
@@ -60,7 +62,7 @@ Run on 2026-09-22, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Refere
 
 - No live-backend, app-build, Chat or Voice cutover, or rollback verification. The Chat migration is planned separately.
 - App typecheck on iOS or visionOS SDKs (macOS only, as before).
-- Reviewer acceptance of this branch, publication and hosted CI.
+- Independent review. The branch was merged by the maintainer.
 
 ## Contract 7/8 parity branch (`feat/contract-7-parity`)
 
@@ -85,7 +87,9 @@ Run on 2026-09-22, macOS 26 (arm64), Swift 6.3.3 / Xcode 17F113. References: Cha
 ### Not run or pending
 
 - No live-backend, app-build, Chat or Voice cutover, or rollback verification. These belong to each app's adoption PR.
-- Reviewer acceptance of this branch, publication and hosted CI.
+- Independent review. The branch was merged by the maintainer.
+
+Since done: published as angel12/mercurykit#1 (`0f16659`). Hosted CI on `macos-15-arm64` with Xcode 16.4 / Swift 6.1.2 passed 401 tests on the pull request (run `35808872117`) and on `main` (run `35808960773`).
 
 ## Earlier candidate
 
@@ -115,6 +119,6 @@ Run on 2026-09-22, macOS 26 (arm64), Swift 6.3.3 / Xcode 17F113. References: Cha
 ### Remaining gates
 
 - Refreshed reviewer acceptance of corrections/documentation/test inventory.
-- Authorized publication and actual GitHub-hosted CI execution.
+- ~~Authorized publication and actual GitHub-hosted CI execution.~~ Done: hosted CI on `macos-15-arm64` with Xcode 16.4 / Swift 6.1.2 passed 308 tests on `main` at `c32e682` (run `34304222649`, 2026-09-09).
 - Generic visionOS Xcode build when the platform component is available; SDK build/typecheck evidence is separate.
 - All app cutover, app-build, live-server and rollback gates remain separate future work.
