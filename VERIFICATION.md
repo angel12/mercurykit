@@ -11,6 +11,7 @@ Run on 2026-09-22, macOS 26 (arm64), Swift 6.3.3 / Xcode 17F113. References: Cha
 - `swift test`: **401 tests / 56 suites passed** (baseline before the branch: 308 / 50). The full run takes about 1.2 s. No loopback test waits out the 5 s capabilities timeout, because the helper auto-answers by default.
 - `swift build` and `swift build --build-tests`: no warnings.
 - `python3 scripts/check-api-constraints.py`: passed. `Fixtures/ExternalConsumer.swift` now calls the contract-7 API without `@testable`, and VoiceClientConfig still rejects Encodable and Decodable.
+- `actionlint .github/workflows/*.yml`: passed with no findings (run by the maintainer on this machine). The branch does not change the workflows.
 - Generic iOS Simulator and generic visionOS Simulator `xcodebuild` package builds, unsigned: both succeeded. These are builds, not simulator execution.
 - Mutation checks, run by hand and then reverted:
   - Resetting the reconnect counters before the handshake (the mercury-voice #126 ordering) fails both give-up-rule cases of `handshakeDropsCountTowardTheGiveUpRule`.
@@ -23,7 +24,6 @@ Run on 2026-09-22, macOS 26 (arm64), Swift 6.3.3 / Xcode 17F113. References: Cha
 
 ### Not run or pending
 
-- `actionlint`: not installed on this machine, so it was not run. The branch does not change `.github/workflows/`.
 - No live-backend, app-build, Chat or Voice cutover, or rollback verification. These belong to each app's adoption PR.
 - Reviewer acceptance of this branch, publication and hosted CI.
 
