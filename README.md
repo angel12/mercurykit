@@ -26,7 +26,8 @@ The package and module are named `MercuryKit`; protocol-facing `Hermes*` type na
 
 ## Source provenance
 
-- Mercury Chat: `70633d3af7630cff96589a17adbea1f196ffc487`
-- Mercury Voice: `3792ac146e0299c17295f928661b7339bb625510`
+- Mercury Chat: `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d` (angel12/mercurychat `main`; adds `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)
+- Mercury Voice: `b403c5e19dbfbefdc8109ad403864413571d9c32` (angel12/mercury-voice `main`, PR #126 contract 7, over the original `3792ac146e0299c17295f928661b7339bb625510` reconciliation)
+- hermes-agent: checked against upstream `main` at `d3b25b52ad` (desktop contract 8)
 
 Consumer cutovers are separate changes after standalone verification. No migration exports or personal service credentials belong in this repository.
