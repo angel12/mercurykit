@@ -336,6 +336,10 @@ extension HermesConnection {
     /// pass one of the event's choices. Without `requestID` the server
     /// resolves the OLDEST queued approval; pass the event's id when it has
     /// one so the answer lands on the exact card the user saw.
+    ///
+    /// The contract-6 path. The method still exists on contract ≥ 7, but an
+    /// `ApprovalRequest` with a `serverRequestID` came from a server request
+    /// and is answered with `answerServerRequest(id:result:)` instead.
     public func respondApproval(
         sessionID: String, choice: String, requestID: String? = nil
     ) async throws {
@@ -352,6 +356,7 @@ extension HermesConnection {
     ///
     /// On a BATCH clarify, calling this without a question id cancels the
     /// whole batch (server resolves every question with this one answer).
+    @available(*, deprecated, message: "Contract-6 only: a contract ≥ 7 backend removed clarify.respond and answers -32601. Use answerServerRequest(id:result:) with ServerRequestResult.clarify.")
     public func respondClarify(
         requestID: String, answer: String
     ) async throws -> PromptResponseStatus {
@@ -365,6 +370,7 @@ extension HermesConnection {
     /// unanswered (nil when the request had already expired); the batch
     /// resolves server-side when the list empties. A locked answer stays
     /// editable until then — re-responding the same qid overwrites it.
+    @available(*, deprecated, message: "Contract-6 only: a contract ≥ 7 backend removed clarify.respond and answers -32601. Use lockClarifyAnswer(requestID:questionID:answer:).")
     public func respondClarifyQuestion(
         requestID: String, questionID: String, answer: String
     ) async throws -> [String]? {
@@ -378,11 +384,84 @@ extension HermesConnection {
         if case .expired = try PromptResponseStatus(result: result) { return nil }
         return result["remaining"]?.arrayValue?.compactMap(\.stringValue) ?? []
     }
+
+    // MARK: Server requests (contract ≥ 7)
+
+    /// `request.answer {id, result}` — answer an open server→client request.
+    /// `result` is one of the `ServerRequestResult` objects; the backend
+    /// refuses a non-object (4002) and undeclared keys (4000).
+    ///
+    /// Answered through an acknowledged RPC rather than a bare response
+    /// frame, so the caller learns whether it landed, and so it works from
+    /// a socket that never received the request (a reconnect restoring
+    /// `open_requests`). `.expired` means the request had already ended
+    /// (timeout, cancel, or answered from another client) and the agent
+    /// never saw this answer; any other status throws.
+    public func answerServerRequest(
+        id: String, result: JSONValue
+    ) async throws -> PromptResponseStatus {
+        let reply = try await request(
+            "request.answer", params: ["id": .string(id), "result": result])
+        return try PromptResponseStatus(result: reply)
+    }
+
+    /// `clarify.lock {request_id, question_id, answer}` — lock one answer of
+    /// a batch clarify server request before the rest are answered, the way
+    /// the desktop does. `requestID` is the request's id
+    /// (`ClarifyRequest.serverRequestID`). Returns the qids still
+    /// unanswered; the lock that empties the list resolves the request with
+    /// every locked answer. A locked answer stays editable until then. Nil
+    /// when the request already ended (`status: "expired"`, not an error).
+    ///
+    /// Optional: one `answerServerRequest` with
+    /// `ServerRequestResult.clarify(answers:)` also resolves the batch, and
+    /// the backend merges any answers locked here into it.
+    public func lockClarifyAnswer(
+        requestID: String, questionID: String, answer: String
+    ) async throws -> [String]? {
+        let result = try await request(
+            "clarify.lock",
+            params: [
+                "request_id": .string(requestID),
+                "question_id": .string(questionID),
+                "answer": .string(answer),
+            ])
+        if case .expired = try PromptResponseStatus(result: result) { return nil }
+        return result["remaining"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
+    /// `connection.respond` — the card's answer to a `ConnectionRequest`.
+    /// Returns whether the operation settled.
+    ///
+    /// The params changed shape at contract 8 (hermes-agent 70f5dc5f46): the
+    /// session moved from `session_id` into `owner: {type: "session",
+    /// session_id}`. Each backend refuses the other shape with 4000, so pass
+    /// the session's `desktopContract`: 7 sends `session_id`; 8, newer, or
+    /// unknown sends `owner` (connection operations do not exist before 7).
+    @discardableResult
+    public func respondConnection(
+        sessionID: String, opID: String, answer: ConnectionAnswer, desktopContract: Int?
+    ) async throws -> Bool {
+        var params: [String: JSONValue] = ["op_id": .string(opID), "result": answer.json]
+        if let desktopContract, desktopContract < 8 {
+            params["session_id"] = .string(sessionID)
+        } else {
+            params["owner"] = ["type": "session", "session_id": .string(sessionID)]
+        }
+        let result = try await request("connection.respond", params: .object(params))
+        guard result["status"]?.stringValue == "ok", let settled = result["settled"]?.boolValue else {
+            throw HermesError.malformedResponse("connection.respond returned no ok status")
+        }
+        return settled
+    }
 }
 
-/// Outcome of answering a blocking prompt (clarify / sudo / secret). The
-/// server resolves a late answer with `{"status": "expired"}` instead of an
-/// error, so transport success alone must never be treated as delivery.
+/// Outcome of answering a blocking prompt (contract-6 clarify / sudo /
+/// secret, contract ≥ 7 `request.answer` and `clarify.lock`). The server
+/// resolves a late answer with `{"status": "expired"}` instead of an error,
+/// so transport success alone must never be treated as delivery. Any other
+/// status, or none, throws `malformedResponse` rather than reading as
+/// delivered.
 public enum PromptResponseStatus: Sendable, Equatable {
     /// The answer reached the waiting agent.
     case accepted
@@ -487,6 +566,7 @@ extension HermesConnection {
     /// `sudo.respond` — answer field is `password` (empty = decline). Never
     /// log or persist the value. Late answers return `{"status":"expired"}`;
     /// check the returned status before reporting delivery.
+    @available(*, deprecated, message: "Contract-6 only: a contract ≥ 7 backend removed sudo.respond and answers -32601. Use answerServerRequest(id:result:) with ServerRequestResult.value(_:).")
     public func respondSudo(
         requestID: String, password: String
     ) async throws -> PromptResponseStatus {
@@ -499,6 +579,7 @@ extension HermesConnection {
     /// `secret.respond` — answer field is `value` (empty = skip). Never log
     /// or persist the value. Late answers return `{"status":"expired"}`;
     /// check the returned status before reporting delivery.
+    @available(*, deprecated, message: "Contract-6 only: a contract ≥ 7 backend removed secret.respond and answers -32601. Use answerServerRequest(id:result:) with ServerRequestResult.value(_:).")
     public func respondSecret(
         requestID: String, value: String
     ) async throws -> PromptResponseStatus {
@@ -512,6 +593,7 @@ extension HermesConnection {
     /// the setup card's outcome. `status` must be one of installed | enabled
     /// | authorized | declined | error; on declined the agent continues
     /// without the server and must not re-ask.
+    @available(*, deprecated, message: "Contract-6 only: a contract ≥ 7 backend removed mcp.setup.respond and answers -32601. Use respondConnection(sessionID:opID:answer:desktopContract:).")
     public func respondMcpSetup(
         requestID: String, status: String, server: String, detail: String? = nil
     ) async throws -> PromptResponseStatus {

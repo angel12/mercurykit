@@ -94,6 +94,8 @@ struct UnionSessionPolicyTests {
         await connection.stop()
     }
 
+    /// The contract-6 reply methods stay for older backends.
+    @available(*, deprecated)
     @Test func exactBlockingPromptPayloadsAndSubmitStatus() async throws {
         let frames = Frames()
         let server = try await server(frames, result: #"{"status":"ok","remaining":["q2"]}"#)
