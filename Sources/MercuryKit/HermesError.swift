@@ -45,6 +45,15 @@ public enum HermesError: Error, LocalizedError, Sendable {
                 return
                     "The server couldn't save your message — its session storage needs repair."
             }
+            if code == RPCCode.unknownParameter {
+                return "This app and the Hermes server are out of sync. Update both, then try again."
+            }
+            if code == RPCCode.profileUnavailable {
+                return "That profile isn't available on this server."
+            }
+            if code == RPCCode.backendRetiring {
+                return "The Hermes server is restarting. Try again in a moment."
+            }
             return "Hermes error \(code): \(message)"
         case .malformedResponse(let why):
             return "Unexpected response from server: \(why)"
@@ -57,9 +66,22 @@ public enum HermesError: Error, LocalizedError, Sendable {
 
     /// Gateway error codes with defined meanings (tui_gateway).
     public enum RPCCode {
+        /// A param key the backend's contract does not declare (upstream
+        /// validates every method's params with `extra="forbid"` since
+        /// 2026-09-14): the client and backend are out of sync.
+        public static let unknownParameter = 4000
         public static let sessionIDRequired = 4006
+        /// Also "session no longer live; retry resume" from a reattaching
+        /// RPC (see `isSessionNotLive`).
         public static let sessionNotFound = 4007
+        /// Also "session disconnect interrupt settling" (see
+        /// `isInterruptSettling`).
         public static let sessionBusy = 4009
+        /// A `profile` param named a missing or invalid profile.
+        public static let profileUnavailable = 4064
+        /// The backend is retiring (cooperative restart); any RPC may get
+        /// this. Retry once the connection is ready again.
+        public static let backendRetiring = 5035
         public static let methodNotFound = -32601
         /// prompt.submit refused: no active-session slot. Carries
         /// `data.reason` (see RefusalReason) on backends ≥ 2026-08-31.
@@ -82,5 +104,37 @@ public enum HermesError: Error, LocalizedError, Sendable {
     public var rpcReason: String? {
         guard case .rpcError(_, _, let data) = self else { return nil }
         return data?["reason"]?.stringValue
+    }
+
+    /// 4000: the request carried a param key this backend does not declare.
+    public var isUnknownParameter: Bool { rpcCode == RPCCode.unknownParameter }
+
+    /// 4007 from a reattaching RPC: the live session was replaced under us
+    /// ("session no longer live; retry resume"). On `prompt.submit` it is a
+    /// refusal issued before the prompt is accepted, so re-resume and
+    /// resubmit. Matches any 4007 (resume's "session not found" too);
+    /// callers scope it to the RPC whose 4007s are all pre-acceptance.
+    public var isSessionNotLive: Bool { rpcCode == RPCCode.sessionNotFound }
+
+    /// 4009 from a reattaching RPC: a client-gone interrupt is still
+    /// settling. The same code carries `prompt.submit`'s other
+    /// pre-acceptance busy refusals, so a short wait and one resubmit is
+    /// safe for all of them.
+    public var isInterruptSettling: Bool { rpcCode == RPCCode.sessionBusy }
+
+    /// 4064: the `profile` param named a profile this server cannot open.
+    public var isProfileUnavailable: Bool { rpcCode == RPCCode.profileUnavailable }
+
+    /// 5035: the backend is retiring. The transport deliberately does not
+    /// redial on it. The code is also returned during a 30 s prepare window
+    /// that can roll back, and dropping the socket would interrupt any turn
+    /// it carries. A committed retirement ends in the process exiting, which
+    /// closes the socket and reconnects the ordinary way. Retry the call
+    /// once the connection is ready again.
+    public var isBackendRetiring: Bool { rpcCode == RPCCode.backendRetiring }
+
+    private var rpcCode: Int? {
+        guard case .rpcError(let code, _, _) = self else { return nil }
+        return code
     }
 }

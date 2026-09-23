@@ -79,4 +79,64 @@ struct TransportUnionRPCErrorReasonTests {
         let error = HermesError.rpcError(code: 4007, message: "session not found", data: .null)
         #expect(error.errorDescription == "Hermes error 4007: session not found")
     }
+
+    // Reattach refusals (tui_gateway session_lifecycle `_reattach_refusal`):
+    // issued before prompt.submit accepts anything, so one resubmit is safe.
+
+    @Test func sessionNotLiveIsClassifiedByCode() {
+        let error = HermesError.rpcError(
+            code: 4007, message: "session no longer live; retry resume", data: nil)
+        #expect(error.isSessionNotLive)
+        #expect(!error.isInterruptSettling)
+    }
+
+    @Test func interruptSettlingIsClassifiedByCode() {
+        let error = HermesError.rpcError(
+            code: 4009, message: "session disconnect interrupt settling", data: nil)
+        #expect(error.isInterruptSettling)
+        #expect(!error.isSessionNotLive)
+    }
+
+    // Contract-wire codes added upstream since the contract-6 baseline.
+
+    @Test func unknownParameterIsClassifiedAndExplained() {
+        let error = HermesError.rpcError(
+            code: 4000,
+            message: "invalid params for session.resume: lazy: extra inputs are not permitted — the client and the Hermes backend are out of sync",
+            data: nil)
+        #expect(error.isUnknownParameter)
+        let text = error.errorDescription ?? ""
+        #expect(text.contains("out of sync"))
+        #expect(!text.contains("session.resume"))
+    }
+
+    @Test func profileUnavailableIsClassifiedAndExplained() {
+        let error = HermesError.rpcError(code: 4064, message: "profile 'x/../y' is unavailable", data: nil)
+        #expect(error.isProfileUnavailable)
+        #expect(error.errorDescription == "That profile isn't available on this server.")
+    }
+
+    @Test func backendRetiringIsClassifiedAndExplained() {
+        let error = HermesError.rpcError(
+            code: 5035, message: "backend is retiring; reconnect to continue", data: nil)
+        #expect(error.isBackendRetiring)
+        #expect(error.errorDescription == "The Hermes server is restarting. Try again in a moment.")
+    }
+
+    @Test func classifiersIgnoreOtherErrors() {
+        let others: [HermesError] = [
+            .notConnected,
+            .rpcError(code: 4090, message: "refused", data: nil),
+            .rpcError(code: -32601, message: "unknown method", data: nil),
+            .connectionClosed(nil),
+            .timeout("x"),
+        ]
+        for error in others {
+            #expect(!error.isSessionNotLive)
+            #expect(!error.isInterruptSettling)
+            #expect(!error.isUnknownParameter)
+            #expect(!error.isProfileUnavailable)
+            #expect(!error.isBackendRetiring)
+        }
+    }
 }

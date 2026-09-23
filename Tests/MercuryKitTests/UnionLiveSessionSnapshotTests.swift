@@ -167,4 +167,80 @@ struct UnionLiveSessionSnapshotTests {
         let bare = SessionHandle(result: .object(["session_id": .string("rt1")]))!
         #expect(snapshot?.describesSameSession(as: bare) == false)
     }
+
+    // MARK: open_requests (contract ≥ 7)
+
+    @Test func absentOpenRequestsDefaultsToEmpty() throws {
+        let snapshot = LiveSessionSnapshot(result: try json("{\(envelope)}"))
+        #expect(snapshot?.openRequests == [])
+    }
+
+    @Test func decodesOpenRequestsEntries() throws {
+        let snapshot = LiveSessionSnapshot(
+            result: try json(
+                """
+                {\(envelope),
+                 "open_requests": [
+                   {"id": "srq-aaaaaaaaaaaa", "method": "approval", "params": {"session_id": "rt1", "request_id": "a1"}},
+                   {"id": "srq-bbbbbbbbbbbb", "method": "clarify", "params": {"session_id": "rt1", "question": "?"}}
+                 ]}
+                """))
+        #expect(snapshot?.openRequests.map(\.id) == ["srq-aaaaaaaaaaaa", "srq-bbbbbbbbbbbb"])
+        #expect(snapshot?.openRequests.first?.method == "approval")
+        #expect(snapshot?.openRequests.first?.sessionID == "rt1")
+    }
+
+    /// A contract ≥ 7 backend still writes `pending_approval` from its queue
+    /// next to the same approval's `open_requests` entry. Both decode; the
+    /// entry's `params.request_id` is how an app spots the duplicate and
+    /// shows only the entry.
+    @Test func openRequestsAndItsPendingApprovalCopyBothDecode() throws {
+        let snapshot = try #require(
+            LiveSessionSnapshot(
+                result: try json(
+                    """
+                    {\(envelope),
+                     "pending_approval": {"command": "ls", "request_id": "a1"},
+                     "open_requests": [
+                       {"id": "srq-aaaaaaaaaaaa", "method": "approval",
+                        "params": {"session_id": "rt1", "request_id": "a1", "command": "ls"}}
+                     ]}
+                    """)))
+        let entry = try #require(snapshot.openRequests.first)
+        let approval = try #require(ApprovalRequest(serverRequest: entry))
+        #expect(approval.serverRequestID == "srq-aaaaaaaaaaaa")
+        #expect(snapshot.pendingApproval?["request_id"] == .string(approval.requestID ?? ""))
+    }
+
+    @Test func openRequestsThatIsNotAnArrayFailsTheSnapshot() throws {
+        #expect(LiveSessionSnapshot(result: try json("{\(envelope), \"open_requests\": {}}")) == nil)
+        #expect(LiveSessionSnapshot(result: try json("{\(envelope), \"open_requests\": \"x\"}")) == nil)
+        #expect(LiveSessionSnapshot(result: try json("{\(envelope), \"open_requests\": null}")) == nil)
+    }
+
+    /// Dropping an undecodable entry would let the caller believe fewer
+    /// requests are open than the backend has outstanding.
+    @Test func openRequestsWithAnUndecodableEntryFailsClosed() throws {
+        #expect(
+            LiveSessionSnapshot(result: try json("{\(envelope), \"open_requests\": [{\"method\": \"approval\"}]}"))
+                == nil)
+        #expect(
+            LiveSessionSnapshot(result: try json("{\(envelope), \"open_requests\": [\"srq-1\"]}")) == nil)
+    }
+
+    // MARK: session.resume's open_requests
+
+    @Test func resumeHandleExposesOpenRequests() throws {
+        let absent = try #require(SessionHandle(result: try json(#"{"session_id": "rt1"}"#)))
+        #expect(absent.openRequests == [])
+        let present = try #require(
+            SessionHandle(
+                result: try json(
+                    #"{"session_id": "rt1", "open_requests": [{"id": "srq-aaaaaaaaaaaa", "method": "sudo", "params": {"session_id": "rt1"}}]}"#)))
+        #expect(present.openRequests?.map(\.method) == ["sudo"])
+        // Unreadable is unknown, not empty: take prompts from activateSession.
+        let unreadable = try #require(
+            SessionHandle(result: try json(#"{"session_id": "rt1", "open_requests": [{"id": 3}]}"#)))
+        #expect(unreadable.openRequests == nil)
+    }
 }

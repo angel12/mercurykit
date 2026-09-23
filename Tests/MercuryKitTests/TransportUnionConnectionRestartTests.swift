@@ -5,16 +5,23 @@ import Testing
 /// Real supervisor and loopback sockets; only actor-suspension timing is gated.
 /// Removing the lifetime checks lets retired cleanup erase the replacement's
 /// gateway or publish an obsolete event/refusal after the replacement is ready.
+///
+/// Every case also runs with the contract-7 handshake on: a retired socket is
+/// still open next to its replacement, so the loopback server must answer
+/// each `client.capabilities` on the socket that asked (a broadcast reply
+/// would resolve the other socket's request with the same id).
 @Suite struct TransportUnionConnectionRestartTests {
     @Test(arguments: [
         (HermesConnection.SupervisorCheckpoint.eventsEnded, UInt16(1000)),
         (.closeCauseRead, 4401), (.closeCauseRead, 4403), (.closeCauseRead, 1000),
         (.closeReasonRead, 4403), (.closeReasonRead, 1000),
         (.eventReceived, 1000), (.connected, 1000), (.connectFailed, 4403),
-    ])
+    ], [ServerRequestPolicy.disabled, .voice])
     func retiredSupervisorCannotMutateReplacement(
-        checkpoint: HermesConnection.SupervisorCheckpoint, closeCode: UInt16
+        _ step: (checkpoint: HermesConnection.SupervisorCheckpoint, closeCode: UInt16),
+        serverRequests: ServerRequestPolicy
     ) async throws {
+        let (checkpoint, closeCode) = step
         let server = try await TransportUnionLoopbackGatewayServer.start { server in
             if checkpoint == .connectFailed && server.upgradeAttempts == 1 {
                 server.close(code: 4403)
@@ -28,7 +35,8 @@ import Testing
         let connection = HermesConnection(
             endpoint: endpoint,
             authenticator: HermesAuthenticator(endpoint: endpoint, credentials: nil),
-            reconnectPolicy: .voice, supervisorCheckpoint: { await gate.visit($0) })
+            reconnectPolicy: .voice, serverRequestPolicy: serverRequests,
+            supervisorCheckpoint: { await gate.visit($0) })
         let log = RestartUpdateLog()
         let updates = await connection.updates()
         let collector = Task {
@@ -77,13 +85,19 @@ import Testing
             #expect(await log.events == ["replacement.marker"])
         }
         #expect(server.upgradeAttempts == 2)
+        if serverRequests.isEnabled {
+            #expect(await connection.serverRequestMethods != nil)
+        } else {
+            #expect(!server.receivedMethods.contains("client.capabilities"))
+        }
         await connection.stop()
         #expect(await transportEventually { await gate.finished == 2 })
         #expect(await connection.phase == .stopped)
         #expect(await connection.replayEpoch == nil)
     }
 
-    @Test func repeatedStopStartKeepsEachReplacementUsable() async throws {
+    @Test(arguments: [ServerRequestPolicy.disabled, .chat])
+    func repeatedStopStartKeepsEachReplacementUsable(serverRequests: ServerRequestPolicy) async throws {
         let server = try await TransportUnionLoopbackGatewayServer.start { server in
             server.sendEvent(type: "gateway.ready", payload: #"{"replay_epoch":"live"}"#)
         }
@@ -93,7 +107,8 @@ import Testing
         let connection = HermesConnection(
             endpoint: endpoint,
             authenticator: HermesAuthenticator(endpoint: endpoint, credentials: nil),
-            reconnectPolicy: .voice, supervisorCheckpoint: { await gate.visit($0) })
+            reconnectPolicy: .voice, serverRequestPolicy: serverRequests,
+            supervisorCheckpoint: { await gate.visit($0) })
         await connection.start()
         #expect(await transportEventually { await connection.phase == .ready(isReconnect: false) })
         for cycle in 1...4 {

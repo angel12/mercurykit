@@ -385,7 +385,8 @@ private final class ResumeOnceBox<Value: Sendable>: @unchecked Sendable {
 /// A `GatewayClient` wired to a scripted socket and already `ready`, i.e. past
 /// the real `connect()` handshake and running the real receive loop.
 func readyGatewayClient(
-    acknowledgesWrites: Bool = true
+    acknowledgesWrites: Bool = true,
+    serverRequestPolicy: ServerRequestPolicy = .disabled
 ) async throws -> (client: GatewayClient, socket: TransportUnionScriptedGatewaySocket) {
     let socket = TransportUnionScriptedGatewaySocket(acknowledgesWrites: acknowledgesWrites)
     let endpoint = ServerEndpoint(baseURL: URL(string: "http://127.0.0.1:8080")!)
@@ -394,6 +395,7 @@ func readyGatewayClient(
         // No credentials: the WS auth query is answered locally, so the
         // handshake never touches the network.
         authenticator: HermesAuthenticator(endpoint: endpoint, credentials: nil),
+        serverRequestPolicy: serverRequestPolicy,
         makeSocket: { _ in socket })
     socket.queueReady()
     try await client.connect(timeout: 5)

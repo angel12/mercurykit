@@ -94,6 +94,8 @@ struct UnionSessionPolicyTests {
         await connection.stop()
     }
 
+    /// The contract-6 reply methods stay for older backends.
+    @available(*, deprecated)
     @Test func exactBlockingPromptPayloadsAndSubmitStatus() async throws {
         let frames = Frames()
         let server = try await server(frames, result: #"{"status":"ok","remaining":["q2"]}"#)
@@ -115,6 +117,35 @@ struct UnionSessionPolicyTests {
         await connection.stop()
     }
 
+    /// `session.redirect` answers `redirected` when the active turn took it,
+    /// `queued` during the turn-build window (it runs next turn) and
+    /// `rejected` when the agent refused (`methods_session.py`
+    /// `_correction_method`).
+    @Test(arguments: [("redirected", true), ("queued", true), ("rejected", false)])
+    func redirectReportsAcceptance(status: String, accepted: Bool) async throws {
+        let frames = Frames()
+        let server = try await server(frames, result: #"{"status":"\#(status)","text":"go left"}"#)
+        defer { server.stop() }
+        let connection = try await connected(server.port)
+        #expect(try await connection.redirectSession(sessionID: "runtime", text: "go left") == accepted)
+        #expect(frames.last?["method"] == "session.redirect")
+        #expect(frames.last?["params"] == ["session_id":"runtime", "text":"go left"])
+        await connection.stop()
+    }
+
+    /// `session.steer` answers `queued` on acceptance, `rejected` otherwise.
+    @Test(arguments: [("queued", true), ("rejected", false), ("redirected", false)])
+    func steerReportsAcceptance(status: String, accepted: Bool) async throws {
+        let frames = Frames()
+        let server = try await server(frames, result: #"{"status":"\#(status)","text":"note"}"#)
+        defer { server.stop() }
+        let connection = try await connected(server.port)
+        #expect(try await connection.steerSession(sessionID: "runtime", text: "note") == accepted)
+        #expect(frames.last?["method"] == "session.steer")
+        #expect(frames.last?["params"] == ["session_id":"runtime", "text":"note"])
+        await connection.stop()
+    }
+
     @Test(arguments: [true, false]) func closeReportsConfirmation(closed: Bool) async throws {
         let frames = Frames()
         let server = try await server(frames, result: closed ? #"{"closed":true}"# : #"{"closed":false}"#)
@@ -123,5 +154,28 @@ struct UnionSessionPolicyTests {
         #expect(await connection.closeSession(sessionID: "runtime") == (closed ? .closed : .unconfirmed))
         await connection.stop()
         if case .failed = await connection.closeSession(sessionID: "runtime") {} else { Issue.record("Disconnected close must fail") }
+    }
+}
+
+@Suite("Desktop contract requirement")
+struct DesktopContractRequirementTests {
+    @Test func eachAppSuppliesItsOwnMinimum() {
+        #expect(DesktopContractRequirement.promptEvents.minimum == 6)
+        #expect(DesktopContractRequirement.serverRequests.minimum == 7)
+        let requirement = DesktopContractRequirement.serverRequests
+        #expect(requirement.assess(nil) == .unknown)
+        #expect(requirement.assess(6) == .older(6))
+        #expect(requirement.assess(7) == .satisfied(7))
+        // Contract 8 (connectors only) is not a warning for either app.
+        #expect(requirement.assess(8) == .satisfied(8))
+        #expect(DesktopContractRequirement.promptEvents.assess(8) == .satisfied(8))
+        #expect(DesktopContractRequirement(minimum: 9).assess(8) == .older(8))
+    }
+
+    /// Chat compares against the old constant with `!=`; its notice must not
+    /// change until Chat moves to a requirement of its own.
+    @available(*, deprecated)
+    @Test func theLegacyConstantStaysAtTheBaseline() {
+        #expect(GatewayClient.builtAgainstDesktopContract == 6)
     }
 }

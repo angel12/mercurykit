@@ -43,7 +43,11 @@ public struct GatewayEvent: Sendable, Equatable {
         public static let toolStart = "tool.start"
         public static let toolProgress = "tool.progress"
         public static let toolComplete = "tool.complete"
+        /// `{kind, text}`; see `StatusKind` for the kinds with a defined meaning.
         public static let statusUpdate = "status.update"
+        // Contract-6 prompt events. A contract ≥ 7 backend sends these
+        // prompts as server→client requests instead (`serverRequest` below)
+        // and never emits the events or their `.expire` companions.
         public static let approvalRequest = "approval.request"
         public static let clarifyRequest = "clarify.request"
         public static let clarifyExpire = "clarify.expire"
@@ -60,10 +64,36 @@ public struct GatewayEvent: Sendable, Equatable {
         public static let sessionReclaimed = "session.reclaimed"
         public static let sessionsChanged = "sessions.changed"
         public static let notificationShow = "notification.show"
+        /// Withdraws the notice a `notification.show` with the same `key` set.
         public static let notificationClear = "notification.clear"
         public static let error = "error"
         /// Nested agent activity arrives as `subagent.*` (open sub-set).
         public static let subagentPrefix = "subagent."
+        /// A delegated child began / ended (`{goal, task_count, task_index,
+        /// subagent_id?, …}`). Several may run at once (`task_count > 1`).
+        public static let subagentStart = "subagent.start"
+        public static let subagentComplete = "subagent.complete"
+        /// Client-local: a server→client request routed onto the event
+        /// stream (`GatewayEvent(serverRequest:)`). Never on the wire.
+        public static let serverRequest = "mercury.server_request"
+        /// Contract ≥ 7: withdraws an open server request `{id, method,
+        /// reason}` (`ServerRequestCancel`). Replaces every `*.expire`.
+        public static let requestCancel = "request.cancel"
+        /// Contract ≥ 7: a connection operation (MCP install / enable /
+        /// authorize, connector connect) opened a consent card
+        /// (`ConnectionRequest`). Replaces `mcp.setup.request`.
+        public static let connectionRequest = "connection.request"
+        /// One target transition or the settlement of an open connection
+        /// operation (full snapshot plus `owner`).
+        public static let connectionUpdate = "connection.update"
+    }
+
+    /// `status.update` kinds with a defined meaning (open set).
+    public enum StatusKind {
+        /// Context compression started.
+        public static let compacting = "compacting"
+        /// Context compression finished.
+        public static let compacted = "compacted"
     }
 }
 
@@ -93,8 +123,14 @@ public struct EventReplayBatch: Sendable, Equatable {
     /// not an array, an entry that is not a decodable event frame, an
     /// unreadable `truncated`, or a `count` disagreeing with the entries
     /// decoded. The frames in hand are then a subset of what was sent — a
-    /// gap, not a replay.
+    /// gap, not a replay. An unreadable `open_requests` counts too.
     public var malformed: Bool
+    /// `open_requests` (contract ≥ 7; always sent there): the server
+    /// requests still open for the session, oldest first. `[]` when absent
+    /// (contract 6) or when `malformed`. Re-deliver them after the replayed
+    /// events, deduplicated by `id`; they take priority over any
+    /// `pending_*` snapshot (see `LiveSessionSnapshot.openRequests`).
+    public var openRequests: [ServerRequest]
 
     public init(result: JSONValue) {
         let entries = result["events"]?.arrayValue
@@ -117,8 +153,11 @@ public struct EventReplayBatch: Sendable, Equatable {
         // entry dropped on the way in. A backend that omits it says nothing,
         // and the per-entry check already covers the drop.
         let countField = result["count"]
+        let openRequests = ServerRequest.openRequests(in: result)
+        self.openRequests = openRequests ?? []
         self.malformed =
             gap == nil
+            || openRequests == nil
             || entries == nil
             || entries?.count != decoded.count
             || (countField != nil && countField?.intValue != decoded.count)
@@ -209,7 +248,34 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
     /// Server-derived subset of once/session/always/deny.
     public var choices: [String]
 
+    /// The `srq-<hex>` id of the server→client request this came from
+    /// (contract ≥ 7): answer it with `answerServerRequest(id:result:)` and
+    /// `ServerRequestResult.approval(choice:)`. Nil for the contract-6
+    /// `approval.request` event and `pending_approval` snapshot, which are
+    /// answered with `respondApproval`.
+    public var serverRequestID: String? = nil
+
     public var id: String { requestID ?? sessionID }
+
+    /// Contract ≥ 7: an `approval` server request. Same field names as the
+    /// contract-6 payload, but fail-closed: the contract requires
+    /// `session_id` and `request_id`, and a present `command`,
+    /// `description` or `choices` of the wrong type refuses the request
+    /// rather than showing a card with guessed content.
+    public init?(serverRequest request: ServerRequest) {
+        let params = request.params
+        guard request.method == ServerRequest.Method.approval,
+            let sessionID = request.sessionID, !sessionID.isEmpty,
+            params.objectValue != nil,
+            let requestID = params["request_id"]?.stringValue, !requestID.isEmpty,
+            promptField(params["command"], isA: \.stringValue),
+            promptField(params["description"], isA: \.stringValue),
+            promptStrings(params["choices"]) != .malformed,
+            var decoded = ApprovalRequest(payload: params, sessionID: sessionID)
+        else { return nil }
+        decoded.serverRequestID = request.id
+        self = decoded
+    }
 
     public init?(event: GatewayEvent) {
         guard event.type == GatewayEvent.Kind.approvalRequest,
@@ -261,6 +327,30 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
         public var multiSelect: Bool
 
         public var id: String { qid }
+
+        public init(qid: String, question: String, choices: [String] = [], multiSelect: Bool = false) {
+            self.qid = qid
+            self.question = question
+            self.choices = choices
+            self.multiSelect = multiSelect
+        }
+
+        /// One `params.questions` entry of a contract ≥ 7 batch
+        /// (`ClarifyQuestion` in the contract): non-empty `qid` and a
+        /// `question` string are required; `choices` and `multi_select`
+        /// must have their declared types when present.
+        init?(serverRequestEntry entry: JSONValue) {
+            guard entry.objectValue != nil,
+                let qid = entry["qid"]?.stringValue, !qid.isEmpty,
+                let question = entry["question"]?.stringValue,
+                promptStrings(entry["choices"]) != .malformed,
+                promptField(entry["multi_select"], isA: \.boolValue)
+            else { return nil }
+            self.init(
+                qid: qid, question: question,
+                choices: ClarifyRequest.cleanChoices(entry["choices"]),
+                multiSelect: entry["multi_select"]?.boolValue ?? false)
+        }
     }
 
     public var requestID: String
@@ -272,11 +362,76 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
     /// Non-empty = batch shape; `question`/`choices` above are then empty.
     public var questions: [Question]
     /// Batch answers already locked server-side (qid → answer) — present on
-    /// the resume payload's `pending_clarify` snapshot after a reconnect.
+    /// the resume payload's `pending_clarify` snapshot after a reconnect,
+    /// and on a replayed contract ≥ 7 request (`params.answers`).
     public var lockedAnswers: [String: String]
+    /// The `srq-<hex>` id of the server→client request this came from
+    /// (contract ≥ 7; equal to `requestID`). Answer it with
+    /// `answerServerRequest(id:result:)` — one `ServerRequestResult.clarify`
+    /// for the whole request, batch or not — and lock batch answers early
+    /// with `lockClarifyAnswer`. Nil for the contract-6 `clarify.request`
+    /// event and `pending_clarify` snapshot, answered with `respondClarify`.
+    public var serverRequestID: String? = nil
 
     public var id: String { requestID }
     public var isBatch: Bool { !questions.isEmpty }
+
+    /// Contract ≥ 7: a `clarify` server request. `requestID` is the request
+    /// id, which is also the correlation id for `clarify.lock`.
+    ///
+    /// Present `params.questions` makes it a batch, and then the top-level
+    /// `question`/`choices` stay empty. Decoding is fail-closed where the
+    /// contract-6 path is lenient: a request without `session_id`, a batch
+    /// with no questions, with an entry that does not decode or with a
+    /// repeated qid, a single request without a `question` string, or a
+    /// locked answer that is not a string refuses the whole request. A
+    /// dropped question would let the app submit `{answers}` for the rest,
+    /// so the batch would look complete to the backend while one question
+    /// was never asked.
+    public init?(serverRequest request: ServerRequest) {
+        let params = request.params
+        guard request.method == ServerRequest.Method.clarify,
+            let sessionID = request.sessionID, !sessionID.isEmpty,
+            params.objectValue != nil
+        else { return nil }
+
+        var locked: [String: String] = [:]
+        if let answers = promptValue(params["answers"]) {
+            guard let object = answers.objectValue else { return nil }
+            for (qid, value) in object {
+                guard let answer = value.stringValue else { return nil }
+                locked[qid] = answer
+            }
+        }
+
+        if let rawQuestions = promptValue(params["questions"]) {
+            guard let entries = rawQuestions.arrayValue, !entries.isEmpty else { return nil }
+            var decoded: [Question] = []
+            for entry in entries {
+                guard let question = Question(serverRequestEntry: entry),
+                    !decoded.contains(where: { $0.qid == question.qid })
+                else { return nil }
+                decoded.append(question)
+            }
+            self.question = ""
+            self.choices = []
+            self.multiSelect = false
+            self.questions = decoded
+        } else {
+            guard let question = params["question"]?.stringValue,
+                promptStrings(params["choices"]) != .malformed,
+                promptField(params["multi_select"], isA: \.boolValue)
+            else { return nil }
+            self.question = question
+            self.choices = Self.cleanChoices(params["choices"])
+            self.multiSelect = params["multi_select"]?.boolValue ?? false
+            self.questions = []
+        }
+        self.requestID = request.id
+        self.serverRequestID = request.id
+        self.sessionID = sessionID
+        self.lockedAnswers = locked
+    }
 
     public init?(event: GatewayEvent) {
         guard event.type == GatewayEvent.Kind.clarifyRequest,
@@ -303,7 +458,7 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
         self.lockedAnswers = locked
     }
 
-    private static func cleanChoices(_ json: JSONValue?) -> [String] {
+    fileprivate static func cleanChoices(_ json: JSONValue?) -> [String] {
         json?.arrayValue?
             .compactMap(\.stringValue)
             .filter { !$0.isEmpty && $0.count <= 200 && !$0.contains("\n") } ?? []
@@ -316,8 +471,29 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
 public struct SudoRequest: Sendable, Equatable, Identifiable {
     public var requestID: String
     public var sessionID: String?
+    /// The command needing the password, redacted server-side (contract
+    /// ≥ 7 only; nil on the contract-6 event).
+    public var command: String? = nil
+    /// The `srq-<hex>` id of the server→client request this came from
+    /// (contract ≥ 7; equal to `requestID`). Answer with
+    /// `answerServerRequest(id:result:)` and `ServerRequestResult.value(_:)`.
+    /// Nil for the contract-6 `sudo.request` event (`respondSudo`).
+    public var serverRequestID: String? = nil
 
     public var id: String { requestID }
+
+    /// Contract ≥ 7: a `sudo` server request (`SudoRequestParams`).
+    public init?(serverRequest request: ServerRequest) {
+        guard request.method == ServerRequest.Method.sudo,
+            let sessionID = request.sessionID, !sessionID.isEmpty,
+            request.params.objectValue != nil,
+            promptField(request.params["command"], isA: \.stringValue)
+        else { return nil }
+        self.requestID = request.id
+        self.sessionID = sessionID
+        self.command = request.params["command"]?.stringValue
+        self.serverRequestID = request.id
+    }
 
     public init?(event: GatewayEvent) {
         guard event.type == GatewayEvent.Kind.sudoRequest,
@@ -336,8 +512,36 @@ public struct SecretRequest: Sendable, Equatable, Identifiable {
     public var sessionID: String?
     public var prompt: String
     public var envVar: String?
+    /// `metadata` of a contract ≥ 7 request (skill-specific context), when
+    /// present.
+    public var metadata: JSONValue? = nil
+    /// The `srq-<hex>` id of the server→client request this came from
+    /// (contract ≥ 7; equal to `requestID`). Answer with
+    /// `answerServerRequest(id:result:)` and `ServerRequestResult.value(_:)`.
+    /// Nil for the contract-6 `secret.request` event (`respondSecret`).
+    public var serverRequestID: String? = nil
 
     public var id: String { requestID }
+
+    /// Contract ≥ 7: a `secret` server request (`SecretRequestParams`):
+    /// `env_var` and `prompt` are required, `metadata` must be an object
+    /// when present.
+    public init?(serverRequest request: ServerRequest) {
+        let params = request.params
+        guard request.method == ServerRequest.Method.secret,
+            let sessionID = request.sessionID, !sessionID.isEmpty,
+            params.objectValue != nil,
+            let envVar = params["env_var"]?.stringValue, !envVar.isEmpty,
+            let prompt = params["prompt"]?.stringValue,
+            promptField(params["metadata"], isA: \.objectValue)
+        else { return nil }
+        self.requestID = request.id
+        self.sessionID = sessionID
+        self.prompt = prompt
+        self.envVar = envVar
+        self.metadata = promptValue(params["metadata"])
+        self.serverRequestID = request.id
+    }
 
     public init?(event: GatewayEvent) {
         guard event.type == GatewayEvent.Kind.secretRequest,
@@ -378,6 +582,32 @@ public struct McpSetupRequest: Sendable, Equatable, Identifiable {
         self.action = event.payload["action"]?.stringValue ?? "install"
         self.reason = event.payload["reason"]?.stringValue ?? ""
     }
+}
+
+// MARK: - Strict field checks for server-request decoding
+
+/// A present, non-null value; `null` reads as absent, the way the contract's
+/// optional fields (`X | None = None`) treat it.
+private func promptValue(_ value: JSONValue?) -> JSONValue? {
+    guard let value, value != .null else { return nil }
+    return value
+}
+
+/// True when the field is absent/null, or present with the declared type.
+private func promptField<T>(_ value: JSONValue?, isA read: (JSONValue) -> T?) -> Bool {
+    guard let value = promptValue(value) else { return true }
+    return read(value) != nil
+}
+
+private enum PromptStrings { case absent, strings, malformed }
+
+/// A `list[str]` field: absent/null, an array of strings, or malformed.
+private func promptStrings(_ value: JSONValue?) -> PromptStrings {
+    guard let value = promptValue(value) else { return .absent }
+    guard let entries = value.arrayValue, entries.allSatisfy({ $0.stringValue != nil }) else {
+        return .malformed
+    }
+    return .strings
 }
 
 /// Usage counters from `message.complete` / `session.usage`. These are

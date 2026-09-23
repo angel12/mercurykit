@@ -24,9 +24,44 @@ Endpoint inference is caller-owned: `ServerEndpoint.parse(_:)` defaults to `.htt
 
 The package and module are named `MercuryKit`; protocol-facing `Hermes*` type names intentionally remain unchanged.
 
+## Hermes desktop contract 7
+
+Since contract 7, blocking prompts are JSON-RPC requests from the server (`ServerRequest`, ids `srq-<hex>`), and a socket must advertise `client.capabilities {server_requests: true}` or they are cancelled server-side. This is a per-app switch, `ServerRequestPolicy`, passed to `HermesConnection`. It defaults to `.disabled`, which behaves exactly like the contract-6 client: nothing is advertised and request frames are ignored.
+
+- `.chat` answers approval, clarify, sudo and secret; `.voice` answers approval and clarify. Answerable requests arrive on the event stream as `GatewayEvent.Kind.serverRequest`, in wire order. They are answered with `answerServerRequest(id:result:)` and `ServerRequestResult`, and withdrawn by `request.cancel` (`ServerRequestCancel`). After a reconnect they are restored from `openRequests`, which takes priority over `pending_*`.
+- A request the app can't answer (for example `vault.*`, `terminal.read` or `tour`, or `sudo` for Voice) is left for another attached client by default. `.refuse` is an opt-in; see below.
+- An answerable request that can't be decoded is always refused with `-32602`, whatever the unanswerable setting, so the agent never waits on a card nobody will show.
+- Each app states the backend contract it needs with `DesktopContractRequirement`. `GatewayClient.builtAgainstDesktopContract` stays at 6 and is deprecated.
+- Retry orchestration for 4007 and 4009 (resubmit after reconnect) stays in the apps. `HermesError` only classifies the codes.
+
+### Unanswerable requests: `.leaveForOtherClients` or `.refuse`
+
+The backend sends every request frame to all clients attached to the session, and the first response settles it for all of them, even an error response. So the choice for methods the app doesn't answer is a trade-off:
+
+| `unanswerable` | Another client (e.g. the desktop) is attached | The app is the only client |
+|---|---|---|
+| `.leaveForOtherClients` (default) | That client answers it normally. | The agent blocks until the server-side deadline (300 s for most prompts), then continues as if skipped. |
+| `.refuse` | The prompt is taken away from that client before the user can answer it there. | The agent continues at once as if skipped. |
+
+With `.refuse`, the kit replies on the same socket with JSON-RPC error `-32601` and the message `"<method> is not handled by this client"`. The message names the method, never the app. Choose it only when the app knows it is the sole client of its sessions:
+
+```swift
+let policy = ServerRequestPolicy(
+    answerableMethods: ServerRequestPolicy.voice.answerableMethods,
+    unanswerable: .refuse)
+let connection = HermesConnection(
+    endpoint: endpoint, authenticator: authenticator,
+    reconnectPolicy: .voice, serverRequestPolicy: policy)
+```
+
+"As if skipped" means a one-string prompt (`vault.*`, GUI reads, `tour`, `sudo`, `secret`) resolves to an empty value, a clarify to an empty answer, and an approval is withdrawn (its command is cancelled, not denied).
+
+The setting has no effect when the policy is `.disabled` (nothing is ever refused), on malformed answerable requests (always refused), or on `open_requests` replayed after a reconnect (the app decides).
+
 ## Source provenance
 
-- Mercury Chat: `70633d3af7630cff96589a17adbea1f196ffc487`
-- Mercury Voice: `3792ac146e0299c17295f928661b7339bb625510`
+- Mercury Chat: `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d` (angel12/mercurychat `main`; adds `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)
+- Mercury Voice: `b403c5e19dbfbefdc8109ad403864413571d9c32` (angel12/mercury-voice `main`, PR #126 contract 7, over the original `3792ac146e0299c17295f928661b7339bb625510` reconciliation)
+- hermes-agent: checked against upstream `main` at `d3b25b52ad` (desktop contract 8)
 
 Consumer cutovers are separate changes after standalone verification. No migration exports or personal service credentials belong in this repository.

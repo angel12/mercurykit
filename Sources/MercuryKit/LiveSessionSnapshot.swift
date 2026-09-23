@@ -37,7 +37,20 @@ public struct LiveSessionSnapshot: Sendable, Equatable {
     /// `pending_approval`, or nil when the key is absent (nothing pending).
     public var pendingApproval: JSONValue?
     /// `pending_clarify`, or nil when the key is absent (nothing pending).
+    /// Contract ≥ 7 backends no longer write it; see `openRequests`.
     public var pendingClarify: JSONValue?
+    /// `open_requests` (contract ≥ 7): the server→client requests still
+    /// waiting for an answer, oldest first; `[]` when absent. Re-deliver
+    /// each as if it had just arrived, deduplicated by `id`.
+    ///
+    /// **`openRequests` takes priority over `pending_*`.** A contract ≥ 7
+    /// backend still writes `pending_approval` from its approval queue, so
+    /// the same approval appears twice: as an `approval` entry here (answer
+    /// it by `id` with `answerServerRequest`) and as `pendingApproval`
+    /// (whose `request_id` equals that entry's `params.request_id`). Show
+    /// the entry here and ignore the `pending_*` copy of it; `pending_*`
+    /// alone is the contract-6 path.
+    public var openRequests: [ServerRequest]
 
     /// Fails when the response is not a live-session payload: every field
     /// checked here is written unconditionally by the builder, so a missing
@@ -82,11 +95,17 @@ public struct LiveSessionSnapshot: Sendable, Equatable {
             else { return nil }
         }
 
+        // Absent means nothing open; a present value the decoder cannot read
+        // in full is an unvalidated shape, refused like an unusable
+        // `pending_clarify` (see `ServerRequest.openRequests(in:)`).
+        guard let openRequests = ServerRequest.openRequests(in: result) else { return nil }
+
         self.runtimeID = runtimeID
         self.sessionKey = sessionKey
         self.startedAt = startedAt
         self.pendingApproval = approvalField
         self.pendingClarify = clarifyField
+        self.openRequests = openRequests
     }
 
     /// A non-empty JSON object, which is the only thing the builder can write
