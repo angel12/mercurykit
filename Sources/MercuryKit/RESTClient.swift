@@ -196,6 +196,25 @@ public struct HermesRESTClient: Sendable {
         return endpoint.webSocketURL("/api/audio/speak-stream", query: query)
     }
 
+    /// `POST /api/audio/tts-lease {lease, active}` — acquire (`active:
+    /// true`) or release the named surface's claim on the server-side TTS
+    /// model, so the backend can warm it up and unload it once no surface
+    /// holds a lease. Best-effort: it never gates speech, so every failure is
+    /// swallowed (404 from a backend without the route, a transport error,
+    /// any non-2xx, an auth refresh failure). `name` should be unique per
+    /// surface and conversation; a lease is not re-acquired after a backend
+    /// restart unless the caller does it.
+    public func ttsLease(name: String, active: Bool, profile: String? = nil) async {
+        do {
+            _ = try await post(
+                "/api/audio/tts-lease",
+                query: profileQuery(profile),
+                body: ["lease": .string(name), "active": .bool(active)])
+        } catch {
+            // Warm-up bookkeeping, not a precondition for speech.
+        }
+    }
+
     // MARK: Plumbing
 
     /// Fetch memory-only direct voice configuration for the selected profile.
