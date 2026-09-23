@@ -89,6 +89,10 @@ Merged at `f94bfafb9e6f90b8ff7fb12562a8216083433632` (PRs #78, #79); kit diff `4
 
 Kit-only changes for the same work: `BotModeRPCTests.swift` (request capture for every Bot Mode call, the CAS revision present and absent, integer revisions on the wire, and fail-closed canonical lookup, and `CronManageError` on a cron tool `success: false`), `VoiceAPICompletenessTests.swift` (`cron.changed`) and `Fixtures/ExternalConsumer.swift` (Bot Mode public API and an external `BotChatPolicy` extension).
 
+## Kit additions after Chat's migration
+
+`ProfileCreateTests.swift` (new): `profiles.create` request capture, result decoding and errors, for mercurychat #27 Phase 3. It has no consumer counterpart: Chat never had this call.
+
 ## Additional reconciliation coverage
 
 - `EndpointPolicyTests`: both consumer defaults and encoded URL behavior.

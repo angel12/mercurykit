@@ -1,6 +1,27 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`). No consumer has migrated yet, and no live-backend or app verification is claimed.
+Released as `0.1.0` (`58d303f`). Mercury Chat uses it (angel12/mercurychat#81 and #82), and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+
+## Profile creation branch (`feat/profiles-create`)
+
+Run on 2026-09-23, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstream hermes-agent `main` at `16fe260aab`, read from an exported tree (`git archive`), never a checkout.
+
+### Verified
+
+- `swift test`: **453 tests / 63 suites passed** (445 / 62 before the branch).
+- `swift build` and `swift build --build-tests`, from a clean `.build`: no warnings.
+- `python3 scripts/check-api-constraints.py`: passed. `Fixtures/ExternalConsumer.swift` calls `createProfile`, `ProfileCreateOptions`, `CreatedProfile` and the new error codes without `@testable`.
+- `actionlint .github/workflows/*.yml`: passed with no findings.
+- Generic iOS Simulator and generic visionOS Simulator `xcodebuild` package builds, unsigned: both succeeded with no warnings.
+- Mutation check, by hand and then reverted: dropping explicit `false` options fails `anExplicitFalseIsSent` and `everyOptionMapsToItsDeclaredKey`.
+- Param-key audit: `profiles.create {name}`, `{name, mirror_credentials: false}` and the maximal set (`name`, `description`, `clone_from`, `clone_all`, `clone_channels`, `no_skills`, `no_alias`, `soul`, `model`, `provider`, `share_auth`, `mirror_credentials`) all pass `validate_params`. Results with `mirrored.auth` `true`, `false` and `"shared"` validate against `ProfilesCreateResult`, and the contract rejects any other `auth`, as the decoder does.
+- Error codes, from `tui_gateway/methods_profiles.py`: 4061 name required, 4062 invalid or taken name or missing `clone_from` (the message says which), 5062 anything else.
+- Upstream drift `9fe737aef2..16fe260aab` (661 commits): the JSON schemas of all 62 contracts the kit uses (every method, event and server request named in `Sources/`, plus `profiles.create`) are unchanged. Upstream added a `display.*` method family and a `display.install.sudo` server request, which the kit doesn't use; it leaves that request for other clients.
+
+### Not run or pending
+
+- No live-backend call of `profiles.create`. It creates a real profile, so it's left to Chat's create-bot PR.
+- Hosted CI for this branch, reviewer acceptance and the `0.2.0` tag.
 
 ## Bot Mode parity branch (`feat/bot-mode-parity`)
 
