@@ -75,6 +75,85 @@ struct TranscriptMessageTests {
             TranscriptMessage(json: json(#"{"role": "assistant", "content": "hi"}"#)))
         #expect(plain.text == "hi")
     }
+
+    // MARK: tool_calls (Chat issue #76)
+
+    @Test func assistantRowCarriesToolCalls() throws {
+        let message = try #require(
+            TranscriptMessage(
+                json: json(
+                    """
+                    {"role": "assistant", "content": "", "tool_calls": [
+                      {"id": "call_1", "type": "function",
+                       "function": {"name": "terminal", "arguments": "{\\"command\\": \\"ls\\"}"}},
+                      {"id": "call_2", "function": {"name": "read_file", "arguments": {"path": "a.txt"}}},
+                      {"id": "call_3", "name": "flat", "arguments": null},
+                      {"function": {"name": "no id"}},
+                      {"id": "", "function": {"name": "empty id"}}
+                    ]}
+                    """)))
+        #expect(message.toolCalls.map(\.id) == ["call_1", "call_2", "call_3"])
+        #expect(message.toolCalls[0].name == "terminal")
+        #expect(message.toolCalls[0].arguments == #"{"command": "ls"}"#)
+        // An object is re-encoded to text rather than dropped.
+        #expect(message.toolCalls[1].arguments == #"{"path":"a.txt"}"#)
+        #expect(message.toolCalls[2].name == "flat")
+        #expect(message.toolCalls[2].arguments == "")
+    }
+
+    @Test func rowWithoutToolCallsHasNone() throws {
+        let message = try #require(
+            TranscriptMessage(json: json(#"{"role": "assistant", "content": "hi"}"#)))
+        #expect(message.toolCalls.isEmpty)
+        let malformed = try #require(
+            TranscriptMessage(json: json(#"{"role": "assistant", "tool_calls": "nope"}"#)))
+        #expect(malformed.toolCalls.isEmpty)
+    }
+}
+
+@Suite("SessionHandle project")
+struct SessionHandleProjectTests {
+    @Test func decodesTheContractProjectObject() throws {
+        let handle = try #require(
+            SessionHandle(
+                result: json(
+                    """
+                    {"session_id": "rt", "info": {"project": {"id": "p1", "slug": "mercury",
+                      "name": "Mercury", "primary_path": "/src/mercury"}}}
+                    """)))
+        #expect(handle.project == "Mercury")
+        #expect(
+            handle.projectRef
+                == SessionHandle.ProjectRef(
+                    id: "p1", slug: "mercury", name: "Mercury", primaryPath: "/src/mercury"))
+    }
+
+    @Test func keepsAnOlderBackendsStringProject() throws {
+        let handle = try #require(
+            SessionHandle(result: json(#"{"session_id": "rt", "info": {"project": "Legacy"}}"#)))
+        #expect(handle.project == "Legacy")
+        #expect(handle.projectRef == nil)
+    }
+
+    @Test func projectObjectFallsBackToSlugThenID() throws {
+        let slugOnly = try #require(
+            SessionHandle(
+                result: json(#"{"session_id": "rt", "info": {"project": {"id": "p1", "slug": "s"}}}"#)))
+        #expect(slugOnly.project == "s")
+        let idOnly = try #require(
+            SessionHandle(result: json(#"{"session_id": "rt", "info": {"project": {"id": "p1"}}}"#)))
+        #expect(idOnly.project == "p1")
+        #expect(idOnly.projectRef?.id == "p1")
+    }
+
+    @Test func absentOrUnusableProjectIsNil() throws {
+        for info in [#"{}"#, #"{"project": null}"#, #"{"project": {}}"#, #"{"project": 3}"#, #"{"project": ""}"#] {
+            let handle = try #require(
+                SessionHandle(result: json(#"{"session_id": "rt", "info": \#(info)}"#)))
+            #expect(handle.project == nil)
+            #expect(handle.projectRef == nil)
+        }
+    }
 }
 
 @Suite("ClarifyRequest parsing")

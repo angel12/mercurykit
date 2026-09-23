@@ -179,7 +179,14 @@ public struct SessionHandle: Sendable, Equatable {
     public var runtimeID: String
     public var storedID: String?
     public var cwd: String?
+    /// Display name of the project the session's cwd belongs to: the
+    /// contract's `info.project.name` (falling back to its slug, then id), or
+    /// the bare string an older backend sent.
     public var project: String?
+    /// `info.project` as the contract types it (`ProjectRef` in
+    /// `tui_gateway/contracts/common.py`); nil when absent, unusable, or a
+    /// bare string from an older backend.
+    public var projectRef: ProjectRef?
     public var profileName: String?
     public var model: String?
     public var title: String?
@@ -194,13 +201,46 @@ public struct SessionHandle: Sendable, Equatable {
         self.storedID = result["stored_session_id"]?.stringValue
         let info = result["info"] ?? .null
         self.cwd = info["cwd"]?.stringValue
-        self.project = info["project"]?.stringValue
+        let projectRef = ProjectRef(json: info["project"])
+        self.projectRef = projectRef
+        self.project = projectRef?.displayName
+            ?? info["project"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
         self.profileName = info["profile_name"]?.stringValue
         self.model = info["model"]?.stringValue
         self.title = info["title"]?.stringValue ?? result["title"]?.stringValue
         self.desktopContract = info["desktop_contract"]?.intValue
             ?? result["desktop_contract"]?.intValue
         self.raw = result
+    }
+
+    /// `{id, slug, name, primary_path?}` — the project `session.info`
+    /// reports for the session's cwd (`_project_info_for_cwd`).
+    public struct ProjectRef: Sendable, Equatable {
+        public var id: String
+        public var slug: String?
+        public var name: String?
+        public var primaryPath: String?
+
+        public init(id: String, slug: String? = nil, name: String? = nil, primaryPath: String? = nil) {
+            self.id = id
+            self.slug = slug
+            self.name = name
+            self.primaryPath = primaryPath
+        }
+
+        /// nil unless `json` is an object with a non-empty string `id`.
+        init?(json: JSONValue?) {
+            guard let id = json?["id"]?.stringValue, !id.isEmpty else { return nil }
+            self.init(
+                id: id,
+                slug: json?["slug"]?.stringValue,
+                name: json?["name"]?.stringValue,
+                primaryPath: json?["primary_path"]?.stringValue)
+        }
+
+        var displayName: String {
+            [name, slug].compactMap { $0 }.first { !$0.isEmpty } ?? id
+        }
     }
 }
 
@@ -267,6 +307,9 @@ public struct TranscriptMessage: Sendable, Equatable, Identifiable {
     public var toolCallID: String?
     /// Tool args/context preview for `role == "tool"` rows.
     public var context: String?
+    /// `tool_calls` on an assistant row (OpenAI shape): the arguments each
+    /// following `role == "tool"` row was invoked with.
+    public var toolCalls: [ToolCallRef] = []
     public var displayKind: String?
     public var timestamp: Date?
     public var raw: JSONValue
@@ -297,11 +340,34 @@ public struct TranscriptMessage: Sendable, Equatable, Identifiable {
         self.toolName = json["tool_name"]?.stringValue ?? json["name"]?.stringValue
         self.toolCallID = json["tool_call_id"]?.stringValue
         self.context = json["context"]?.stringValue
+        self.toolCalls = json["tool_calls"]?.arrayValue?.compactMap(ToolCallRef.init(json:)) ?? []
         self.displayKind = json["display_kind"]?.stringValue
         if let epoch = json["timestamp"]?.doubleValue {
             self.timestamp = Date(timeIntervalSince1970: epoch)
         }
         self.raw = json
+    }
+}
+
+/// One entry of an assistant row's `tool_calls`. Arguments are the raw
+/// JSON-encoded string the model produced (occasionally an object on older
+/// backends — re-encoded to text either way).
+public struct ToolCallRef: Sendable, Equatable {
+    public var id: String
+    public var name: String?
+    public var arguments: String
+
+    public init?(json: JSONValue) {
+        guard let id = json["id"]?.stringValue, !id.isEmpty else { return nil }
+        self.id = id
+        let function = json["function"]
+        self.name = function?["name"]?.stringValue ?? json["name"]?.stringValue
+        let rawArgs = function?["arguments"] ?? json["arguments"]
+        switch rawArgs {
+        case .string(let text)?: self.arguments = text
+        case .none, .null?: self.arguments = ""
+        case let value?: self.arguments = value.encodedString()
+        }
     }
 }
 
