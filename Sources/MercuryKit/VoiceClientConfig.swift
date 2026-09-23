@@ -52,6 +52,10 @@ public struct DirectSTTConfig: Sendable, Equatable {
     public var apiKey: String
     public var model: String?
     public var language: String?
+    /// `stt.openai.timeout`: the gateway's own transcription deadline, in
+    /// seconds. Nil when absent, not a number, zero or negative; the caller
+    /// then keeps its current timeout.
+    public var timeoutS: Double?
 
     /// nil for relay verdicts, unknown wires, or malformed configs — all of
     /// which mean "use the relay endpoint".
@@ -68,6 +72,7 @@ public struct DirectSTTConfig: Sendable, Equatable {
         self.apiKey = apiKey
         self.model = json["model"]?.stringValue
         self.language = json["language"]?.stringValue
+        self.timeoutS = json["timeout_s"]?.doubleValue.flatMap { $0 > 0 ? $0 : nil }
     }
 }
 
@@ -88,6 +93,14 @@ public struct DirectTTSConfig: Sendable, Equatable {
     public var model: String?
     public var voice: String?
     public var speed: Double?
+    /// `tts.streaming.min_len`: the shortest sentence (characters) the
+    /// client-side cutter emits on its own. Nil when absent, not an integer,
+    /// zero or negative; the caller then keeps its current threshold.
+    public var minLen: Int?
+    /// Fields the server forwards verbatim into the provider request body
+    /// (`lang_code`, `consent_attestation`, …; openai-speech wire). Nil when
+    /// absent or not an object. May carry attestation data: never log it.
+    public var extraBody: [String: JSONValue]?
 
     public init?(json: JSONValue) {
         guard json["mode"]?.stringValue == "direct",
@@ -103,5 +116,7 @@ public struct DirectTTSConfig: Sendable, Equatable {
         self.model = json["model"]?.stringValue
         self.voice = json["voice"]?.stringValue
         self.speed = json["speed"]?.doubleValue
+        self.minLen = json["min_len"]?.intValue.flatMap { $0 > 0 ? $0 : nil }
+        self.extraBody = json["extra_body"]?.objectValue
     }
 }
