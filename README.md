@@ -26,6 +26,8 @@ The package and module are named `MercuryKit`; protocol-facing `Hermes*` type na
 
 Bot Mode (from Mercury Chat #78/#79) is in the kit as wire calls and decoders, plus the rules hermes-agent defines: the `"Bot Chat"` canonical title, the `hermes-bots` `ui_meta` key and the `[bot:<name>]` routine prefix. `BotChatPolicy.isCompactCommand` is not: turning `/new`, `/reset` and `/compact` into compression in the composer is a UI decision. Chat keeps it in ChatCore as `extension BotChatPolicy { public static func isCompactCommand(_:) }`. `BotChatPolicy` stays a public enum so consumers can extend it.
 
+The profile editor (mercurychat#27 Phase 3) adds three protocol-only calls: `describeProfile(name:)` (`profiles.describe`) returns the editor snapshot — soul, model pin, skills, toolsets and MCP servers; `configureProfile(name:changes:)` (`profiles.configure`) saves any subset of those sections independently via `ProfileChanges`, reporting `failedSections` and a pending `confirmationRequired` for a guarded model pick; and `modelInventory(profile:)` (`model.options`, scoped to the profile) lists the models and providers that profile can pin. No UI strings or policy: which sections to show, and how to render a confirmation prompt, remain in consumers.
+
 ## Hermes desktop contract 7
 
 Since contract 7, blocking prompts are JSON-RPC requests from the server (`ServerRequest`, ids `srq-<hex>`), and a socket must advertise `client.capabilities {server_requests: true}` or they are cancelled server-side. This is a per-app switch, `ServerRequestPolicy`, passed to `HermesConnection`. It defaults to `.disabled`, which behaves exactly like the contract-6 client: nothing is advertised and request frames are ignored.
@@ -64,6 +66,6 @@ The setting has no effect when the policy is `.disabled` (nothing is ever refuse
 
 - Mercury Chat: `f94bfafb9e6f90b8ff7fb12562a8216083433632` (angel12/mercurychat `main`; adds Bot Mode Phase 1 and 2 from PRs #78 and #79 over `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d`, which added `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)
 - Mercury Voice: `b403c5e19dbfbefdc8109ad403864413571d9c32` (angel12/mercury-voice `main`, PR #126 contract 7, over the original `3792ac146e0299c17295f928661b7339bb625510` reconciliation)
-- hermes-agent: checked against upstream `main` at `16fe260aab` (desktop contract 8): every contract the kit uses is unchanged since `9fe737aef2`, where Bot Mode parity was checked. The contract-7/8 parity work was checked at `d3b25b52ad`.
+- hermes-agent: checked against upstream `main` at `67f7e1d6b3` (desktop contract 8): every contract the kit uses is unchanged since `9fe737aef2`, where Bot Mode parity was checked. The contract-7/8 parity work was checked at `d3b25b52ad`.
 
 Consumer cutovers are separate changes after standalone verification. No migration exports or personal service credentials belong in this repository.

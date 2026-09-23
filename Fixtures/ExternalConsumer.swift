@@ -126,3 +126,27 @@ func adoptProfileCreate(connection: HermesConnection, row: JSONValue) async thro
     _ = CreatedProfile(json: row)
     _ = HermesError.RPCCode.profileNameRequired + HermesError.RPCCode.profileCreateRejected
 }
+
+// Profile editor (#27 Phase 3) without @testable.
+func adoptProfileEditor(connection: HermesConnection, row: JSONValue) async throws {
+    let described: ProfileDescription = try await connection.describeProfile(name: "scout", timeout: 60)
+    _ = try await connection.describeProfile(name: "scout")
+    _ = (described.name, described.description, described.soul, described.toolsetsPinned)
+    _ = described.model?.provider
+    _ = described.skills.first?.enabled
+    _ = described.toolsets.first?.label
+    _ = described.mcpServers.first?.transport
+    _ = ProfileDescription.Capability(name: "c", enabled: true)
+    _ = ProfileDescription.Toolset(name: "t", label: "L", description: "D", toolCount: 1, enabled: true)
+    _ = ProfileDescription.MCPServer(name: "s", enabled: true, transport: "stdio")
+    _ = ProfileDescription.ModelPin(provider: "p", model: "m")
+    _ = ProfileDescription(json: row)
+    _ = HermesError.RPCCode.profileUnavailable
+    let changes = ProfileChanges(soul: "s", description: "d", model: .init(provider: "p", model: "m"), confirmExpensiveModel: true, disabledSkills: [], enabledToolsets: [], enabledMCPServers: [])
+    let outcome = try await connection.configureProfile(name: "scout", changes: changes, timeout: 60)
+    _ = (outcome.failedSections, outcome.confirmationRequired)
+    let inventory: ModelInventory = try await connection.modelInventory(profile: "scout", timeout: 120)
+    _ = (inventory.currentModel, inventory.currentProvider, inventory.providers)
+    _ = ModelInventory.Provider(slug: "s", name: "n", models: [], isCurrent: true, authenticated: nil, warning: nil, unavailableModels: [])
+    _ = ModelInventory(json: row)
+}
