@@ -44,7 +44,7 @@ public struct ProfileDescription: Sendable, Equatable {
     public var name: String
     public var description: String
     public var soul: String
-    /// nil when the profile pins no model (it inherits the launch profile's).
+    /// nil unless both the provider and the default model are set; a half-set pin in config.yaml reads as nil.
     public var model: ModelPin?
     public var skills: [Capability]
     public var toolsets: [Toolset]
@@ -132,7 +132,7 @@ public struct ProfileConfigureOutcome: Sendable, Equatable {
         case mcpServers = "mcp_servers"
     }
 
-    /// Only the sections the request carried. A pending model is absent.
+    /// Only the sections the request carried. A pending model is absent; the model key is also absent when the sent pin had an empty model or provider (upstream skips it without confirmation). When changes.model is set, check applied[.model] != nil || confirmationRequired to know it was acted on.
     public var applied: [Section: Bool]
     /// The model section wrote nothing: ask the user, then resend only the
     /// model with `confirmExpensiveModel: true`.
@@ -209,7 +209,7 @@ extension HermesConnection {
 
     /// Save editor sections (`profiles.configure`). Sections apply
     /// independently. Check `failedSections`, and `confirmationRequired`
-    /// when `changes.model` is set.
+    /// when `changes.model` is set. A thrown error does not mean nothing was written; earlier sections may already be saved, so re-describe the profile after an error.
     public func configureProfile(
         name: String, changes: ProfileChanges, timeout: TimeInterval = 60
     ) async throws -> ProfileConfigureOutcome {
@@ -220,7 +220,7 @@ extension HermesConnection {
         return outcome
     }
 
-    /// The models `profile` can pin (`model.options` scoped to it).
+    /// The models `profile` can pin (`model.options` scoped to it). An unknown profile throws an `rpcError`; the code isn't guaranteed to be 4064.
     public func modelInventory(profile: String, timeout: TimeInterval = 120) async throws -> ModelInventory {
         let result = try await request("model.options", params: .object(["profile": .string(profile)]), timeout: timeout)
         guard let inventory = ModelInventory(json: result) else {

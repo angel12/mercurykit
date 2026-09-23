@@ -66,6 +66,6 @@ The setting has no effect when the policy is `.disabled` (nothing is ever refuse
 
 - Mercury Chat: `f94bfafb9e6f90b8ff7fb12562a8216083433632` (angel12/mercurychat `main`; adds Bot Mode Phase 1 and 2 from PRs #78 and #79 over `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d`, which added `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)
 - Mercury Voice: `b403c5e19dbfbefdc8109ad403864413571d9c32` (angel12/mercury-voice `main`, PR #126 contract 7, over the original `3792ac146e0299c17295f928661b7339bb625510` reconciliation)
-- hermes-agent: checked against upstream `main` at `520fead094` (desktop contract 8): every contract the kit uses is unchanged since `9fe737aef2`, where Bot Mode parity was checked. The contract-7/8 parity work was checked at `d3b25b52ad`.
+- hermes-agent: checked against upstream `main` at `67f7e1d6b3` (desktop contract 8): every contract the kit uses is unchanged since `9fe737aef2`, where Bot Mode parity was checked. The contract-7/8 parity work was checked at `d3b25b52ad`.
 
 Consumer cutovers are separate changes after standalone verification. No migration exports or personal service credentials belong in this repository.
