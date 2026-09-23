@@ -331,6 +331,133 @@ public struct CronManageError: Error, LocalizedError, Sendable, Equatable {
     }
 }
 
+// MARK: - Profile creation
+
+/// Optional settings for `HermesConnection.createProfile`. A nil field is
+/// left off the wire so the backend's own default applies; an explicit
+/// `false` is sent. Mirrors `ProfilesCreateParams` in upstream's
+/// `tui_gateway/contracts/profiles_vault_complete_foreign_subagents.py`.
+public struct ProfileCreateOptions: Sendable, Equatable {
+    public var description: String?
+    /// Clone this existing profile. Omitted: a fresh profile with the
+    /// bundled skills.
+    public var cloneFrom: String?
+    /// With `cloneFrom`, copy everything, not just the config.
+    public var cloneAll: Bool?
+    /// With `cloneFrom`, keep the source's bot tokens and allowlists. Off by
+    /// default so two profiles never hold one messaging bot.
+    public var cloneChannels: Bool?
+    public var noSkills: Bool?
+    /// Skip the `hermes-<name>` alias wrapper script.
+    public var noAlias: Bool?
+    /// Written to the profile's SOUL.md.
+    public var soul: String?
+    /// Pinned only together with `provider`.
+    public var model: String?
+    public var provider: String?
+    /// Share the launch profile's auth store instead of copying it.
+    public var shareAuth: Bool?
+    /// Copy the launch profile's .env, auth and voice settings, and inherit
+    /// its model when none is pinned. On by default: without it a new
+    /// profile has no provider and can't answer.
+    public var mirrorCredentials: Bool?
+
+    public init(
+        description: String? = nil, cloneFrom: String? = nil, cloneAll: Bool? = nil,
+        cloneChannels: Bool? = nil, noSkills: Bool? = nil, noAlias: Bool? = nil,
+        soul: String? = nil, model: String? = nil, provider: String? = nil,
+        shareAuth: Bool? = nil, mirrorCredentials: Bool? = nil
+    ) {
+        self.description = description
+        self.cloneFrom = cloneFrom
+        self.cloneAll = cloneAll
+        self.cloneChannels = cloneChannels
+        self.noSkills = noSkills
+        self.noAlias = noAlias
+        self.soul = soul
+        self.model = model
+        self.provider = provider
+        self.shareAuth = shareAuth
+        self.mirrorCredentials = mirrorCredentials
+    }
+
+    /// The params object: `name` plus exactly the set fields.
+    func params(name: String) -> JSONValue {
+        var params: [String: JSONValue] = ["name": .string(name)]
+        let strings: [(String, String?)] = [
+            ("description", description), ("clone_from", cloneFrom), ("soul", soul),
+            ("model", model), ("provider", provider),
+        ]
+        for (key, value) in strings {
+            if let value { params[key] = .string(value) }
+        }
+        let flags: [(String, Bool?)] = [
+            ("clone_all", cloneAll), ("clone_channels", cloneChannels), ("no_skills", noSkills),
+            ("no_alias", noAlias), ("share_auth", shareAuth), ("mirror_credentials", mirrorCredentials),
+        ]
+        for (key, value) in flags {
+            if let value { params[key] = .bool(value) }
+        }
+        return .object(params)
+    }
+}
+
+/// A `profiles.create` result (`ProfilesCreateResult`). The profile is then
+/// listed by `profiles.list` under `name`.
+public struct CreatedProfile: Sendable, Equatable {
+    public var name: String
+    public var path: String
+    public var soulWritten: Bool
+    public var modelSet: Bool
+    public var mirrored: Mirrored
+
+    /// What was copied from the launch profile (`ProfileMirrored`).
+    public struct Mirrored: Sendable, Equatable {
+        public var env: Bool
+        public var auth: AuthMirror
+        public var modelInherited: Bool
+        public var voice: Bool
+
+        public init(env: Bool, auth: AuthMirror, modelInherited: Bool, voice: Bool) {
+            self.env = env
+            self.auth = auth
+            self.modelInherited = modelInherited
+            self.voice = voice
+        }
+    }
+
+    /// `mirrored.auth`: `false`, `true`, or `"shared"` with `shareAuth`.
+    public enum AuthMirror: Sendable, Equatable {
+        case none
+        case copied
+        case shared
+    }
+
+    /// Fail-closed on what the contract requires (`name`, `path`,
+    /// `mirrored`) and on an `auth` value it doesn't allow.
+    public init?(json: JSONValue) {
+        guard let name = json["name"]?.stringValue, !name.isEmpty,
+            let path = json["path"]?.stringValue,
+            let mirrored = json["mirrored"], mirrored.objectValue != nil
+        else { return nil }
+        let auth: AuthMirror
+        switch mirrored["auth"] {
+        case nil, .bool(false)?: auth = .none
+        case .bool(true)?: auth = .copied
+        case .string("shared")?: auth = .shared
+        default: return nil
+        }
+        self.name = name
+        self.path = path
+        self.soulWritten = json["soul_written"]?.boolValue ?? false
+        self.modelSet = json["model_set"]?.boolValue ?? false
+        self.mirrored = Mirrored(
+            env: mirrored["env"]?.boolValue ?? false, auth: auth,
+            modelInherited: mirrored["model_inherited"]?.boolValue ?? false,
+            voice: mirrored["voice"]?.boolValue ?? false)
+    }
+}
+
 // MARK: - Bot meta writes
 
 /// Outcome of a `profiles.configure` ui_meta write.
@@ -522,6 +649,23 @@ extension HermesConnection {
             return .conflict
         }
         return applied?["ui_meta"]?.truthy == true ? .persisted : .failed
+    }
+
+    /// Create a profile: the WS twin of `POST /api/profiles`, and a new bot
+    /// in Bot Mode (give it a look afterwards with `configureBotMeta`).
+    /// Throws `rpcError` 4062 (`RPCCode.profileCreateRejected`) when the
+    /// name is invalid or taken, or `cloneFrom` doesn't exist, with the
+    /// backend's explanation as the message.
+    public func createProfile(
+        name: String, options: ProfileCreateOptions = ProfileCreateOptions(),
+        timeout: TimeInterval = 60
+    ) async throws -> CreatedProfile {
+        let result = try await request(
+            "profiles.create", params: options.params(name: name), timeout: timeout)
+        guard let profile = CreatedProfile(json: result) else {
+            throw HermesError.malformedResponse("profiles.create returned no name, path or mirrored")
+        }
+        return profile
     }
 
     // MARK: Routines

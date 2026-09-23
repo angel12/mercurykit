@@ -106,3 +106,23 @@ extension BotChatPolicy {
         return ["/new", "/reset", "/compact"].contains(command?.lowercased() ?? "")
     }
 }
+
+// Profile creation (#27 Phase 3, create-bot quick path) without @testable.
+func adoptProfileCreate(connection: HermesConnection, row: JSONValue) async throws {
+    let options = ProfileCreateOptions(
+        description: "d", cloneFrom: nil, cloneAll: nil, cloneChannels: nil, noSkills: nil,
+        noAlias: nil, soul: nil, model: nil, provider: nil, shareAuth: nil, mirrorCredentials: true)
+    _ = (options.description, options.cloneFrom, options.cloneAll, options.cloneChannels, options.noSkills)
+    _ = (options.noAlias, options.soul, options.model, options.provider, options.shareAuth, options.mirrorCredentials)
+    let created: CreatedProfile = try await connection.createProfile(name: "scout", options: options, timeout: 60)
+    _ = try await connection.createProfile(name: "scout")
+    _ = (created.name, created.path, created.soulWritten, created.modelSet)
+    let mirrored: CreatedProfile.Mirrored = created.mirrored
+    _ = (mirrored.env, mirrored.modelInherited, mirrored.voice)
+    switch mirrored.auth {
+    case .none, .copied, .shared: break
+    }
+    _ = CreatedProfile.Mirrored(env: true, auth: .shared, modelInherited: false, voice: false)
+    _ = CreatedProfile(json: row)
+    _ = HermesError.RPCCode.profileNameRequired + HermesError.RPCCode.profileCreateRejected
+}
