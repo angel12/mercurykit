@@ -230,4 +230,31 @@ private actor TransportUnionPhaseLog {
         #expect(await dialer.connects == 1)
         await connection.stop()
     }
+
+    /// 5035 is not a transport failure. It is returned during a prepare
+    /// window that can roll back, and a voluntary disconnect would interrupt
+    /// the turn the socket carries. A committed retirement exits the
+    /// process, which closes the socket and reconnects the normal way. So
+    /// the RPC fails with a classifiable error and the socket stays up.
+    @Test func backendRetiringKeepsTheSocket() async {
+        let retiring = HermesError.rpcError(
+            code: 5035, message: "backend is retiring; reconnect to continue", data: nil)
+        let dialer = TransportUnionPolicyDialer(succeeds: true, pingError: retiring)
+        let connection = connection(policy: .chat, dialer: dialer)
+        await connection.start()
+        #expect(await transportEventually { await connection.phase == .ready(isReconnect: false) })
+        do {
+            _ = try await connection.request("gateway.ping")
+            Issue.record("the 5035 reply did not surface")
+        } catch let error as HermesError {
+            #expect(error.isBackendRetiring)
+        } catch {
+            Issue.record("unexpected \(error)")
+        }
+        await connection.verifyConnection()
+        #expect(await dialer.closes == 0)
+        #expect(await connection.phase == .ready(isReconnect: false))
+        #expect(await dialer.connects == 1)
+        await connection.stop()
+    }
 }
