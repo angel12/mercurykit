@@ -406,7 +406,7 @@ public enum PromptResponseStatus: Sendable, Equatable {
 extension HermesConnection {
     /// `session.steer` — inject text into the next tool result of the
     /// running turn without interrupting. Returns true when the agent
-    /// accepted it (`status: "queued"`).
+    /// accepted it (`status: "queued"`; a refusal is `"rejected"`).
     @discardableResult
     public func steerSession(sessionID: String, text: String) async throws -> Bool {
         let result = try await request(
@@ -416,13 +416,17 @@ extension HermesConnection {
     }
 
     /// `session.redirect` — redirect the active model turn, preserving valid
-    /// work. Falls back server-side to queueing during the turn-build window.
+    /// work. Returns true when the server took it: `"redirected"` (the
+    /// active turn was redirected) or `"queued"` (sent during the turn-build
+    /// window, so it runs as the next turn instead). `"rejected"` — the
+    /// agent refused — is false.
     @discardableResult
     public func redirectSession(sessionID: String, text: String) async throws -> Bool {
         let result = try await request(
             "session.redirect",
             params: ["session_id": .string(sessionID), "text": .string(text)])
-        return result["status"]?.stringValue == "queued"
+        let status = result["status"]?.stringValue
+        return status == "redirected" || status == "queued"
     }
 
     /// `session.title` — set (or, with nil, fetch/settle) the session title.
