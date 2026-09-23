@@ -191,4 +191,42 @@ struct ProfileEditorTests {
             return
         }
     }
+
+    private static let inventory = #"""
+        {"model": "gpt-5.6-sol", "provider": "openai-codex",
+         "providers": [
+           {"slug": "openai-codex", "name": "OpenAI Codex", "models": ["gpt-5.6-sol", "gpt-5.6-mini"],
+            "is_current": true, "authenticated": true, "unavailable_models": ["gpt-5.6-mini"]},
+           {"slug": "anthropic", "name": "Anthropic", "models": [], "warning": "No API key"},
+           {"name": "no slug, skipped"}]}
+        """#
+
+    /// Scoped to the bot's profile, so the picker shows what that profile
+    /// can reach.
+    @Test func theInventoryIsAskedForTheProfile() async throws {
+        let inventory = try await withGateway(.result(Self.inventory)) { connection, frames in
+            let inventory = try await connection.modelInventory(profile: "scout")
+            #expect(frames.last?["method"] == "model.options")
+            #expect(frames.last?["params"] == ["profile": "scout"])
+            return inventory
+        }
+        #expect(inventory.currentModel == "gpt-5.6-sol")
+        #expect(inventory.currentProvider == "openai-codex")
+        #expect(inventory.providers.map(\.slug) == ["openai-codex", "anthropic"])
+        #expect(inventory.providers[0] == .init(
+            slug: "openai-codex", name: "OpenAI Codex", models: ["gpt-5.6-sol", "gpt-5.6-mini"], isCurrent: true,
+            authenticated: true, warning: nil, unavailableModels: ["gpt-5.6-mini"]))
+        #expect(inventory.providers[1].warning == "No API key")
+        #expect(inventory.providers[1].authenticated == nil)
+    }
+
+    @Test func anInventoryWithoutProvidersThrows() async throws {
+        let caught = try await withGateway(.result(#"{"model": "m"}"#)) { connection, _ -> Error? in
+            do { _ = try await connection.modelInventory(profile: "a"); return nil } catch { return error }
+        }
+        guard case HermesError.malformedResponse = try #require(caught) else {
+            Issue.record("expected malformedResponse, got \(String(describing: caught))")
+            return
+        }
+    }
 }

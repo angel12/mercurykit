@@ -153,6 +153,49 @@ public struct ProfileConfigureOutcome: Sendable, Equatable {
     }
 }
 
+/// A profile's model picker inventory (`model.options`, `ModelOptionsResult`).
+public struct ModelInventory: Sendable, Equatable {
+    public struct Provider: Sendable, Equatable, Identifiable {
+        public var slug: String
+        public var name: String
+        public var models: [String]
+        public var isCurrent: Bool
+        /// nil when the gateway didn't say.
+        public var authenticated: Bool?
+        public var warning: String?
+        /// Listed models the provider can't serve right now.
+        public var unavailableModels: [String]
+        public var id: String { slug }
+
+        public init(
+            slug: String, name: String, models: [String], isCurrent: Bool, authenticated: Bool?,
+            warning: String?, unavailableModels: [String]
+        ) {
+            self.slug = slug; self.name = name; self.models = models; self.isCurrent = isCurrent
+            self.authenticated = authenticated; self.warning = warning; self.unavailableModels = unavailableModels
+        }
+    }
+
+    public var providers: [Provider]
+    public var currentModel: String
+    public var currentProvider: String
+
+    /// nil without `providers` (required). Rows without `slug` or `name` are skipped.
+    public init?(json: JSONValue) {
+        guard let rows = json["providers"]?.arrayValue else { return nil }
+        providers = rows.compactMap { row in
+            guard let slug = row["slug"]?.stringValue, let name = row["name"]?.stringValue else { return nil }
+            return Provider(
+                slug: slug, name: name, models: (row["models"]?.arrayValue ?? []).compactMap(\.stringValue),
+                isCurrent: row["is_current"]?.truthy ?? false, authenticated: row["authenticated"]?.boolValue,
+                warning: row["warning"]?.stringValue,
+                unavailableModels: (row["unavailable_models"]?.arrayValue ?? []).compactMap(\.stringValue))
+        }
+        currentModel = json["model"]?.stringValue ?? ""
+        currentProvider = json["provider"]?.stringValue ?? ""
+    }
+}
+
 extension HermesConnection {
     /// The profile editor's snapshot. Throws `rpcError` 4064
     /// (`RPCCode.profileUnavailable`) for an unknown profile.
@@ -175,5 +218,14 @@ extension HermesConnection {
             throw HermesError.malformedResponse("profiles.configure returned no applied")
         }
         return outcome
+    }
+
+    /// The models `profile` can pin (`model.options` scoped to it).
+    public func modelInventory(profile: String, timeout: TimeInterval = 120) async throws -> ModelInventory {
+        let result = try await request("model.options", params: .object(["profile": .string(profile)]), timeout: timeout)
+        guard let inventory = ModelInventory(json: result) else {
+            throw HermesError.malformedResponse("model.options returned no providers")
+        }
+        return inventory
     }
 }

@@ -145,4 +145,8 @@ func adoptProfileEditor(connection: HermesConnection, row: JSONValue) async thro
     let changes = ProfileChanges(soul: "s", description: "d", model: .init(provider: "p", model: "m"), confirmExpensiveModel: true, disabledSkills: [], enabledToolsets: [], enabledMCPServers: [])
     let outcome = try await connection.configureProfile(name: "scout", changes: changes, timeout: 60)
     _ = (outcome.failedSections, outcome.confirmationRequired)
+    let inventory: ModelInventory = try await connection.modelInventory(profile: "scout", timeout: 120)
+    _ = (inventory.currentModel, inventory.currentProvider, inventory.providers)
+    _ = ModelInventory.Provider(slug: "s", name: "n", models: [], isCurrent: true, authenticated: nil, warning: nil, unavailableModels: [])
+    _ = ModelInventory(json: row)
 }
