@@ -21,6 +21,12 @@ struct VoiceAPICompletenessTests {
         #expect(GatewayEvent.StatusKind.compacted == "compacted")
     }
 
+    /// Chat's Bot Mode (mercurychat #78/#79) refetches routines on this
+    /// empty-payload signal (`tui_gateway/contracts/events.py`).
+    @Test func botModeEventNamesArePublic() {
+        #expect(GatewayEvent.Kind.cronChanged == "cron.changed")
+    }
+
     /// Voice answers approval and clarify; Chat adds sudo and secret. Both
     /// default off until each app's adoption PR.
     @Test func serverRequestPoliciesPerApp() {
