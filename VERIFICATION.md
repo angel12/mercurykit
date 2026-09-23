@@ -2,6 +2,64 @@
 
 Unpublished candidate. No consumer migration or release is claimed.
 
+## Bot Mode parity branch (`feat/bot-mode-parity`)
+
+Run on 2026-09-22, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). References: Chat `f94bfaf` (Bot Mode PRs #78, #79 over `44abd62`), upstream hermes-agent `main` at `9fe737aef2`, read from an exported tree (`git archive`), never a checkout.
+
+### Verified
+
+- `swift test`: **441 tests / 62 suites passed** (401 / 56 before the branch).
+- `swift build` and `swift build --build-tests`, from a clean `.build`: no warnings.
+- `python3 scripts/check-api-constraints.py`: passed. `Fixtures/ExternalConsumer.swift` calls every Bot Mode type, property and method without `@testable`, and extends `BotChatPolicy` from outside the module. Making `metaWriteOutcome` internal fails the check (run by hand, then reverted).
+- `actionlint .github/workflows/*.yml`: passed with no findings. The branch does not change the workflows.
+- Generic iOS Simulator and generic visionOS Simulator `xcodebuild` package builds, unsigned: both succeeded with no warnings. These are builds, not simulator execution.
+- Mutation check, run by hand and then reverted: making `findCanonicalBotChat` swallow request errors into `nil` fails all three fail-closed cases in `BotModeRPCTests`.
+- Upstream rules, confirmed at `9fe737aef2` and cited in doc comments:
+  - `"Bot Chat"` is `BOT_CHAT_TITLE` in `tools/bot_mode_probe.py`, used by `agent/system_prompt.py`, `agent/turn_context.py`, `cron/scheduler_delivery.py` and `session.list`'s title lookup.
+  - `hermes-bots` is the `ui_meta` key read by `tools/bot_mode_probe.py` and `hermes_cli/profiles.py` and written by the desktop plugin (`apps/desktop/src/plugins/hermes-bots/data.ts`).
+  - `[bot:<name>]` is `BOT_TAG_RE` in `apps/desktop/src/plugins/hermes-bots/cron.tsx`, documented in `website/docs/user-guide/bot-mode.md` and in the `cron.manage` handler.
+- Param-key audit: every params object the Bot Mode calls send, at its maximal key set, passes `tui_gateway.contracts.registry.validate_params` on `9fe737aef2`:
+  - `profiles.list {include_sessions}`
+  - `session.list {profile, title, include_hidden, limit}`
+  - `session.compress {session_id}`
+  - `profiles.get_asset {name, asset}`
+  - `profiles.set_asset {name, asset, data}` and `{name, asset, clear}`
+  - `profiles.configure {name, ui_meta, ui_meta_expected_revisions}`, with and without the revisions
+  - `cron.manage {action, include_disabled, profile}` and `{action, name, profile}` for pause, resume and remove
+
+  The tests pin that the CAS revision is sent as a JSON integer, which upstream requires (`isinstance(wanted, int)`).
+- Result-shape audit: these validate against the result models:
+  - `profiles.list` rows with `ui_meta`, `ui_meta_revisions`, `last_session`, `canonical_session` and `worker_session`, and a bare row;
+  - `profiles.configure` applied and CAS-conflict results;
+  - `profiles.get_asset` found and absent;
+  - `profiles.set_asset` stored and cleared;
+  - `session.compress` compressed and pending;
+  - `session.list` title-lookup and empty results;
+  - `cron.manage` list, pause/resume and tool-failure results.
+
+  `cron.changed` is a declared event. Fields the decoders read that upstream does not declare:
+  - `session.list` rows (`SessionListRow`, closed) have no `root_title` or `last_active`. `findCanonicalBotChat` therefore matches on `title`, which on the title lookup is the root row's title, and its stub's `lastActive` is always nil.
+  - `CronJobRow` (open) declares `job_id`, `prompt_preview` and ISO string timestamps. The `id`, `prompt` and epoch-second fallbacks are for older stores.
+- Upstream drift `d3b25b52ad..9fe737aef2` (10 commits): no change to `tui_gateway/contracts`, `server_requests.py` or events.
+  - The `gateway.standalone` topology work keeps standalone profiles servable for profile-scoped calls (`launch_profile_policy.py`).
+  - Connection operations gained the `plugin` and `skill` kinds (`tools/connectors/contract.py`). `ConnectionRequest.kind` is a `String`, so they decode.
+  - No kit change was needed.
+- Test drift: in `70633d3..f94bfaf` only `BotRosterTests.swift` changed under Chat's `MercuryKitTests`. Every other Chat kit test name exists in MercuryKit except the five live-Keychain tests the inventory already records as replaced.
+- Chat compatibility, in a throwaway clone of Chat `f94bfaf` with `Sources/MercuryKit` replaced by this branch and `extension BotChatPolicy { public static func isCompactCommand(_:) }` (Chat's code, verbatim) added to ChatCore:
+  - `swift build --target ChatCore`, from clean: no errors or warnings.
+  - ChatCoreTests: **95 tests / 6 suites passed**. With Chat's two `isCompactCommand` tests moved into ChatCoreTests: 97 / 7 passed. Chat's own kit-test copy was excluded. It has the 12 known errors plus 9 from its `isCompactCommand` cases, which move to ChatCore.
+  - App sources (`Mercury/**/*.swift`, including `BotViews.swift`, `BotEditViews.swift`, `SidebarView.swift`, `AppModel.swift` and `ChatController.swift`) typechecked on macOS with `swiftc -typecheck` against the built modules. The branch adds **no errors and no warnings**. The final diagnostics are identical to Chat `44abd62` typechecked against MercuryKit `main` with the same shims.
+  - Known errors, pre-existing adoption work, shimmed in the throwaway copies only:
+    - the seven recorded below: five in `AppModel.swift` and two `rpcError` patterns in `ChatController.swift`;
+    - an **eighth not previously recorded**: `StatusViews.swift` switches over `ConnectionPhase` without `.refused(reason:)`. It reproduces with Chat `44abd62` + MercuryKit `main`. The earlier check stopped before reaching that file.
+  - Known warnings: eight deprecations. They are the seven recorded below, plus `builtAgainstDesktopContract` in `StatusViews.swift`, which went unrecorded for the same reason.
+
+### Not run or pending
+
+- No live-backend, app-build, Chat or Voice cutover, or rollback verification. The Chat migration is planned separately.
+- App typecheck on iOS or visionOS SDKs (macOS only, as before).
+- Reviewer acceptance of this branch, publication and hosted CI.
+
 ## Contract 7/8 parity branch (`feat/contract-7-parity`)
 
 Run on 2026-09-22, macOS 26 (arm64), Swift 6.3.3 / Xcode 17F113. References: Chat `44abd62b`, Voice `b403c5e`, upstream hermes-agent `main` at `d3b25b52ad` (desktop contract 8; `git ls-remote` confirmed nothing newer).
