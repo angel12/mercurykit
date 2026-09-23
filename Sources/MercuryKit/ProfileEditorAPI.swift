@@ -83,6 +83,76 @@ public struct ProfileDescription: Sendable, Equatable {
     }
 }
 
+/// The editor sections to save with `profiles.configure`. A nil field is
+/// left out, and upstream leaves that section untouched. `ui_meta` isn't
+/// here: `configureBotMeta` writes it with its CAS revision.
+public struct ProfileChanges: Sendable, Equatable {
+    public var soul: String?
+    public var description: String?
+    public var model: ProfileDescription.ModelPin?
+    /// Resend a guarded model after the user confirmed it.
+    public var confirmExpensiveModel: Bool?
+    /// The complete list of disabled skills.
+    public var disabledSkills: [String]?
+    /// The toolset pin; empty clears it (the platform default applies).
+    public var enabledToolsets: [String]?
+    /// The complete list of enabled MCP servers.
+    public var enabledMCPServers: [String]?
+
+    public init(
+        soul: String? = nil, description: String? = nil, model: ProfileDescription.ModelPin? = nil,
+        confirmExpensiveModel: Bool? = nil, disabledSkills: [String]? = nil,
+        enabledToolsets: [String]? = nil, enabledMCPServers: [String]? = nil
+    ) {
+        self.soul = soul; self.description = description; self.model = model
+        self.confirmExpensiveModel = confirmExpensiveModel; self.disabledSkills = disabledSkills
+        self.enabledToolsets = enabledToolsets; self.enabledMCPServers = enabledMCPServers
+    }
+
+    func params(name: String) -> JSONValue {
+        var params: [String: JSONValue] = ["name": .string(name)]
+        if let soul { params["soul"] = .string(soul) }
+        if let description { params["description"] = .string(description) }
+        if let model {
+            params["model"] = .string(model.model)
+            params["provider"] = .string(model.provider)
+        }
+        if let confirmExpensiveModel { params["confirm_expensive_model"] = .bool(confirmExpensiveModel) }
+        if let disabledSkills { params["disabled_skills"] = .array(disabledSkills.map(JSONValue.string)) }
+        if let enabledToolsets { params["enabled_toolsets"] = .array(enabledToolsets.map(JSONValue.string)) }
+        if let enabledMCPServers { params["enabled_mcp_servers"] = .array(enabledMCPServers.map(JSONValue.string)) }
+        return .object(params)
+    }
+}
+
+/// What `profiles.configure` reports for each section it was sent.
+public struct ProfileConfigureOutcome: Sendable, Equatable {
+    public enum Section: String, Sendable, CaseIterable {
+        case soul, description, model, skills, toolsets
+        case mcpServers = "mcp_servers"
+    }
+
+    /// Only the sections the request carried. A pending model is absent.
+    public var applied: [Section: Bool]
+    /// The model section wrote nothing: ask the user, then resend only the
+    /// model with `confirmExpensiveModel: true`.
+    public var confirmationRequired: Bool
+    public var confirmationMessage: String?
+
+    public var failedSections: [Section] { Section.allCases.filter { applied[$0] == false } }
+
+    init?(json: JSONValue) {
+        guard let applied = json["applied"]?.objectValue else { return nil }
+        var sections: [Section: Bool] = [:]
+        for section in Section.allCases {
+            if let value = applied[section.rawValue], value != .null { sections[section] = value.truthy }
+        }
+        self.applied = sections
+        confirmationRequired = json["confirm_required"]?.truthy ?? false
+        confirmationMessage = json["confirm_message"]?.stringValue
+    }
+}
+
 extension HermesConnection {
     /// The profile editor's snapshot. Throws `rpcError` 4064
     /// (`RPCCode.profileUnavailable`) for an unknown profile.
@@ -92,5 +162,18 @@ extension HermesConnection {
             throw HermesError.malformedResponse("profiles.describe returned no name or model")
         }
         return profile
+    }
+
+    /// Save editor sections (`profiles.configure`). Sections apply
+    /// independently. Check `failedSections`, and `confirmationRequired`
+    /// when `changes.model` is set.
+    public func configureProfile(
+        name: String, changes: ProfileChanges, timeout: TimeInterval = 60
+    ) async throws -> ProfileConfigureOutcome {
+        let result = try await request("profiles.configure", params: changes.params(name: name), timeout: timeout)
+        guard let outcome = ProfileConfigureOutcome(json: result) else {
+            throw HermesError.malformedResponse("profiles.configure returned no applied")
+        }
+        return outcome
     }
 }

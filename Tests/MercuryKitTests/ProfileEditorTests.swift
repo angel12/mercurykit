@@ -122,4 +122,73 @@ struct ProfileEditorTests {
         #expect(code == HermesError.RPCCode.profileUnavailable)
         #expect(message == "profile 'ghost' not found")
     }
+
+    private static let appliedAll = #"{"ok": true, "applied": {"soul": true, "model": true, "skills": true, "toolsets": true, "mcp_servers": true}}"#
+
+    @Test func onlyTheChangedSectionsAreSent() async throws {
+        try await withGateway(.result(#"{"ok": true, "applied": {"soul": true}}"#)) { connection, frames in
+            let outcome = try await connection.configureProfile(name: "scout", changes: ProfileChanges(soul: "# Scout"))
+            #expect(frames.last?["method"] == "profiles.configure")
+            #expect(frames.last?["params"] == ["name": "scout", "soul": "# Scout"])
+            #expect(outcome.applied == [.soul: true])
+            #expect(outcome.failedSections.isEmpty)
+            #expect(!outcome.confirmationRequired)
+        }
+    }
+
+    @Test func everySectionMapsToItsDeclaredKey() async throws {
+        let changes = ProfileChanges(
+            soul: "s", description: "d", model: .init(provider: "openai-codex", model: "gpt-5.6-sol"),
+            confirmExpensiveModel: true, disabledSkills: ["pdf"], enabledToolsets: [], enabledMCPServers: ["linear"])
+        try await withGateway(.result(Self.appliedAll)) { connection, frames in
+            _ = try await connection.configureProfile(name: "scout", changes: changes)
+            #expect(frames.last?["params"] == [
+                "name": "scout", "soul": "s", "description": "d", "model": "gpt-5.6-sol",
+                "provider": "openai-codex", "confirm_expensive_model": true, "disabled_skills": ["pdf"],
+                "enabled_toolsets": [], "enabled_mcp_servers": ["linear"],
+            ])
+        }
+    }
+
+    /// An empty list is a choice (clear the pin, enable nothing), not an
+    /// omission, so it must reach the wire.
+    @Test func anEmptyListIsSent() async throws {
+        try await withGateway(.result(#"{"ok": true, "applied": {"mcp_servers": true}}"#)) { connection, frames in
+            _ = try await connection.configureProfile(name: "scout", changes: ProfileChanges(enabledMCPServers: []))
+            #expect(frames.last?["params"] == ["name": "scout", "enabled_mcp_servers": []])
+        }
+    }
+
+    @Test func aFailedSectionIsReported() async throws {
+        try await withGateway(.result(#"{"ok": false, "applied": {"soul": true, "skills": false}}"#)) { connection, _ in
+            let outcome = try await connection.configureProfile(
+                name: "scout", changes: ProfileChanges(soul: "s", disabledSkills: []))
+            #expect(outcome.failedSections == [.skills])
+        }
+    }
+
+    /// A guarded (expensive or data-policy) model writes nothing until the
+    /// client resends with `confirm_expensive_model`. The other sections
+    /// were applied; the model section is pending, not failed.
+    @Test func aGuardedModelAsksForConfirmation() async throws {
+        let reply = #"{"ok": true, "applied": {"soul": true}, "confirm_required": true, "confirm_message": "This model costs $$$"}"#
+        try await withGateway(.result(reply)) { connection, _ in
+            let outcome = try await connection.configureProfile(
+                name: "scout", changes: ProfileChanges(soul: "s", model: .init(provider: "p", model: "m")))
+            #expect(outcome.confirmationRequired)
+            #expect(outcome.confirmationMessage == "This model costs $$$")
+            #expect(outcome.failedSections.isEmpty)
+        }
+    }
+
+    @Test func aResultWithoutAppliedThrows() async throws {
+        let caught = try await withGateway(.result(#"{"ok": true}"#)) { connection, _ -> Error? in
+            do { _ = try await connection.configureProfile(name: "a", changes: ProfileChanges(soul: "s")); return nil }
+            catch { return error }
+        }
+        guard case HermesError.malformedResponse = try #require(caught) else {
+            Issue.record("expected malformedResponse, got \(String(describing: caught))")
+            return
+        }
+    }
 }

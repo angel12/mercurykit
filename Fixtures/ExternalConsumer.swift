@@ -142,4 +142,7 @@ func adoptProfileEditor(connection: HermesConnection, row: JSONValue) async thro
     _ = ProfileDescription.ModelPin(provider: "p", model: "m")
     _ = ProfileDescription(json: row)
     _ = HermesError.RPCCode.profileUnavailable
+    let changes = ProfileChanges(soul: "s", description: "d", model: .init(provider: "p", model: "m"), confirmExpensiveModel: true, disabledSkills: [], enabledToolsets: [], enabledMCPServers: [])
+    let outcome = try await connection.configureProfile(name: "scout", changes: changes, timeout: 60)
+    _ = (outcome.failedSections, outcome.confirmationRequired)
 }
