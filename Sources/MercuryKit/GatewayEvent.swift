@@ -63,6 +63,9 @@ public struct GatewayEvent: Sendable, Equatable {
         public static let sessionResumeProgress = "session.resume_progress"
         public static let sessionReclaimed = "session.reclaimed"
         public static let sessionsChanged = "sessions.changed"
+        /// The gateway's cron store changed (job added/removed/paused/fired) —
+        /// empty payload, refetch to see what.
+        public static let cronChanged = "cron.changed"
         public static let notificationShow = "notification.show"
         /// Withdraws the notice a `notification.show` with the same `key` set.
         public static let notificationClear = "notification.clear"

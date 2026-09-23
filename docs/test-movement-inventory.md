@@ -79,6 +79,16 @@ Kit-only changes for the same work: `TransportUnionPolicyTests.swift` (the fake 
 
 `70633d3..44abd62` adds `ToolCallRef` / `TranscriptMessage.toolCalls` (issue #76). Its tests live in `ChatCoreTests/TranscriptStoreTests.swift` and stay in Chat; the kit decoding is covered by `ModelsTests.swift` (`TranscriptMessageTests`).
 
+## mercury (Chat) Bot Mode
+
+Merged at `f94bfafb9e6f90b8ff7fb12562a8216083433632` (PRs #78, #79); kit diff `44abd62..f94bfaf` under `Packages/MercuryCore/Tests/MercuryKitTests/`. No other kit test file changed in `70633d3..f94bfaf`. Destinations below are under `Tests/MercuryKitTests/`.
+
+| Source file | Classification | Destination / rationale |
+|---|---|---|
+| `BotRosterTests.swift` (new) | Moved/adapted | BotRosterTests.swift — throwing `json(_:)` helper instead of `try!`; adds CronJob `id`/`prompt_preview`/name/epoch/offset/zero fallbacks, exact timestamps, the raw `ui_meta` namespace and CAS revision, malformed rows and the canonical-title constant. The two `isCompactCommand` tests (`compactCommandsAreIntercepted`, `everythingElsePassesThrough`) are retained in the consumer: they move to ChatCoreTests with the ChatCore extension |
+
+Kit-only changes for the same work: `BotModeRPCTests.swift` (request capture for every Bot Mode call, the CAS revision present and absent, integer revisions on the wire, and fail-closed canonical lookup, and `CronManageError` on a cron tool `success: false`), `VoiceAPICompletenessTests.swift` (`cron.changed`) and `Fixtures/ExternalConsumer.swift` (Bot Mode public API and an external `BotChatPolicy` extension).
+
 ## Additional reconciliation coverage
 
 - `EndpointPolicyTests`: both consumer defaults and encoded URL behavior.
