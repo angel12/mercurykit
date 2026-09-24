@@ -1,6 +1,25 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`) and `0.3.0` (`478b021`). Mercury Chat uses `0.3.0` (it adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85 and `0.3.0` in #87), and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`) and `0.3.1` (`4eda260`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+
+## Privacy manifest branch (`feat/privacy-manifest`)
+
+Run on 2026-09-24, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). For angel12/mercurychat#100: Apple requires an SDK to declare its own required-reason API use in a privacy manifest it ships, and the consuming app's manifest doesn't cover it.
+
+### Verified
+
+- Audit of `Sources/` against Apple's required-reason list (UserDefaults, file timestamps, system boot time, disk space, active keyboards): the only use is `ProcessInfo.processInfo.systemUptime`, `HermesConnection`'s default `now` clock, which only measures how long a connection has been failing. `KeychainTokenStore` mentions UserDefaults only in a doc comment.
+- `Sources/MercuryKit/PrivacyInfo.xcprivacy` declares `NSPrivacyAccessedAPICategorySystemBootTime` with reason `35F9.1` (elapsed time between in-app events), no tracking, no tracking domains and no collected data. It ships through `resources: [.copy("PrivacyInfo.xcprivacy")]`. `plutil -lint` passed.
+- `swift test`: **469 tests / 65 suites passed** (466 / 64 before the branch). The new `PrivacyManifestTests` checks the declared reasons, the no-tracking and no-collection keys, and that the built `MercuryKit_MercuryKit.bundle` contains the manifest and matches the source. All three failed before the manifest existed.
+- `python3 scripts/check-api-constraints.py`: passed.
+- Mercury Chat built against the branch through a local path override, then against the tagged `0.3.1`, for iOS Simulator, macOS and visionOS Simulator: each `Mercury.app` contains `MercuryKit_MercuryKit.bundle/PrivacyInfo.xcprivacy` (under `Contents/Resources/…/Contents/Resources/` on macOS) next to the app's own manifest.
+- Hosted CI on GitHub's `macos-15-arm64` image (version `20260907.0337.1`) with Xcode 16.4 / Swift 6.1.2: **469 tests passed**, and `check-api-constraints.py` passed. That was on the pull request (run `35954702813`, `e99690f`) and on `main` after the merge (run `35954852790`, `4eda260`).
+- Published: merged as angel12/mercurykit#7 (`4eda260`) and tagged `0.3.1` after `main` CI passed.
+
+### Not run or pending
+
+- No archive, Xcode privacy report (Organizer only) or App Store upload.
+- Not run for this branch: `actionlint` (the workflows are unchanged), the clean-`.build` warning check, and standalone generic iOS / visionOS package builds. The Chat builds above compiled the kit for those platforms.
 
 ## Profile editor branch (`feat/profile-editor`)
 
