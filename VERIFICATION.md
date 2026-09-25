@@ -1,6 +1,6 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`) and `0.3.1` (`4eda260`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`) and `0.4.0` (`bd43e91`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
 ## Upstream parity branch (`fix/upstream-parity-59004a6235`)
 
@@ -13,10 +13,12 @@ Run on 2026-09-25, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstre
 - `session.steer` doc: an idle session now answers `"rejected"` (hermes-agent `0641ee1dcd`), which the kit already returns as false. No code change.
 - `swift test`: **473 tests / 65 suites passed** (469 / 65 on `main`).
 - `python3 scripts/check-api-constraints.py`: passed.
+- Hosted CI: passed on the pull request (run `36151599489`, `e97f1da`) and on `main` after the merge (run `36153370980`, `bd43e91`).
+- Published: merged as angel12/mercurykit#9 (`bd43e91`) and tagged `0.4.0` after `main` CI passed.
 
 ### Not run or pending
 
-- Hosted CI, and no live backend check.
+- No live backend check, and Mercury Chat hasn't adopted `0.4.0` yet.
 - Not wrapped (optional, no compatibility impact): `session.branch_whole` / `session.branch_stored`, `/api/health` `displayVersion`, `/api/status` `shared_profile_warning`. `response_transformed` and `display_kind: "failed_turn"` are reducer rules for the apps.
 
 ## Privacy manifest branch (`feat/privacy-manifest`)
