@@ -309,6 +309,9 @@ public struct SpokenClip: Sendable, Equatable {
 public struct TranscriptMessage: Sendable, Equatable, Identifiable {
     public var rowID: Int?
     public var role: String
+    /// For `role == "tool"` rows, the raw tool result: REST ships it for every
+    /// tool, the gateway projection only for edit tools (`write_file`,
+    /// `patch`, `skill_manage`), so it's empty for other gateway tool rows.
     public var text: String
     public var reasoning: String?
     public var toolName: String?
@@ -318,6 +321,11 @@ public struct TranscriptMessage: Sendable, Equatable, Identifiable {
     /// `tool_calls` on an assistant row (OpenAI shape): the arguments each
     /// following `role == "tool"` row was invoked with.
     public var toolCalls: [ToolCallRef] = []
+    /// `display_commentary` on an assistant row: interim text the model wrote
+    /// beside its tool calls (Codex providers), already stripped and redacted.
+    /// Empty when the profile hides commentary. Never read the raw
+    /// `codex_message_items` in `raw` instead.
+    public var commentary: [String] = []
     public var displayKind: String?
     public var timestamp: Date?
     public var raw: JSONValue
@@ -343,12 +351,17 @@ public struct TranscriptMessage: Sendable, Equatable, Identifiable {
         self.text = json["display_content"]?.stringValue ?? json["content"]?.stringValue
             ?? json["text"]?.stringValue
             ?? ""
-        self.reasoning = json["reasoning"]?.stringValue
+        // display_reasoning is the stored reasoning minus the Codex commentary
+        // flattened into it. Present-but-empty still wins: the raw copy would
+        // leak commentary a profile has turned off.
+        self.reasoning = json["display_reasoning"]?.stringValue
+            ?? json["reasoning"]?.stringValue
             ?? json["reasoning_content"]?.stringValue
         self.toolName = json["tool_name"]?.stringValue ?? json["name"]?.stringValue
         self.toolCallID = json["tool_call_id"]?.stringValue
         self.context = json["context"]?.stringValue
         self.toolCalls = json["tool_calls"]?.arrayValue?.compactMap(ToolCallRef.init(json:)) ?? []
+        self.commentary = json["display_commentary"]?.arrayValue?.compactMap(\.stringValue) ?? []
         self.displayKind = json["display_kind"]?.stringValue
         if let epoch = json["timestamp"]?.doubleValue {
             self.timestamp = Date(timeIntervalSince1970: epoch)

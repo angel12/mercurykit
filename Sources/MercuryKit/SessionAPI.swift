@@ -485,7 +485,9 @@ public enum PromptResponseStatus: Sendable, Equatable {
 extension HermesConnection {
     /// `session.steer` — inject text into the next tool result of the
     /// running turn without interrupting. Returns true when the agent
-    /// accepted it (`status: "queued"`; a refusal is `"rejected"`).
+    /// accepted it (`status: "queued"`). False is `"rejected"`, which the
+    /// server sends when no turn is running: nothing was stored, so send the
+    /// text as the next `prompt.submit` or it's lost.
     @discardableResult
     public func steerSession(sessionID: String, text: String) async throws -> Bool {
         let result = try await request(

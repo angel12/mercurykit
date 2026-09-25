@@ -76,6 +76,57 @@ struct TranscriptMessageTests {
         #expect(plain.text == "hi")
     }
 
+    // MARK: Codex commentary projection (hermes-agent #107386)
+
+    @Test func prefersDisplayReasoningProjection() throws {
+        // display_reasoning is the stored reasoning with the flattened
+        // commentary removed; only the projected fields are public text.
+        let message = try #require(
+            TranscriptMessage(
+                json: json(
+                    #"{"role": "assistant", "content": "Done.", "reasoning": "plan\nChecking the file.\nverify", "display_reasoning": "plan\nverify"}"#
+                )))
+        #expect(message.reasoning == "plan\nverify")
+    }
+
+    @Test func emptyDisplayReasoningHidesRawReasoning() throws {
+        // Empty means the reasoning was all commentary, not "absent": the raw
+        // copy must not come back, or a profile that hides commentary leaks it.
+        let message = try #require(
+            TranscriptMessage(
+                json: json(
+                    #"{"role": "assistant", "content": "Done.", "reasoning": "Checking the file.", "display_reasoning": ""}"#
+                )))
+        #expect(message.reasoning == "")
+    }
+
+    @Test func readsDisplayCommentary() throws {
+        let message = try #require(
+            TranscriptMessage(
+                json: json(
+                    #"{"role": "assistant", "content": "Done.", "display_commentary": ["Checking the file.", 3, "Running tests."]}"#
+                )))
+        #expect(message.commentary == ["Checking the file.", "Running tests."])
+
+        let plain = try #require(
+            TranscriptMessage(json: json(#"{"role": "assistant", "content": "hi"}"#)))
+        #expect(plain.commentary.isEmpty)
+    }
+
+    @Test func gatewayEditToolRowKeepsItsResult() throws {
+        // The gateway projection ships `content` for write_file/patch/
+        // skill_manage rows (the raw result, as REST always has); it stays
+        // the row's text rather than being dropped.
+        let message = try #require(
+            TranscriptMessage(
+                json: json(
+                    #"{"role": "tool", "name": "patch", "context": "a.swift", "content": "{\"success\": true}", "tool_call_id": "call_9", "timestamp": 1754900000}"#
+                )))
+        #expect(message.text == #"{"success": true}"#)
+        #expect(message.toolCallID == "call_9")
+        #expect(message.timestamp == Date(timeIntervalSince1970: 1_754_900_000))
+    }
+
     // MARK: tool_calls (Chat issue #76)
 
     @Test func assistantRowCarriesToolCalls() throws {
