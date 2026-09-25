@@ -2,7 +2,7 @@
 
 Shared Swift protocol client for Mercury Chat and Mercury Voice, connecting to Hermes Agent.
 
-**Status:** latest release `0.3.1`, which adds the kit's privacy manifest. Mercury Chat uses it (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87 and the privacy manifest in #115) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet.
+**Status:** latest release `0.4.0`, which reads hermes-agent's commentary projection on history rows (parity with upstream `59004a6235`). Mercury Chat uses `0.3.1` (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87 and the privacy manifest in #115) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet.
 
 ## Platforms
 
