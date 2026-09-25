@@ -2,6 +2,23 @@
 
 Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`) and `0.3.1` (`4eda260`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
+## Upstream parity branch (`fix/upstream-parity-59004a6235`)
+
+Run on 2026-09-25, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstream hermes-agent audited from `67f7e1d6b3` to `upstream/main` head `59004a6235` (2,655 commits, fetched fresh, read through `git show`/`git diff` against the ref, never a checkout). `DESKTOP_BACKEND_CONTRACT` is still 8.
+
+### Verified
+
+- `apps/shared/src/gateway-contract.openrpc.json` diffed between the two commits: no method, server request or notification removed or changed. Added: `session.branch_stored`, `session.branch_whole`, `MessageCompletePayload.response_transformed`, and `TranscriptMessage.content` / `tool_call_id`. The REST routers the kit calls (`audio`, `sessions`, `profiles`, `status`, `chat_ws`, `dashboard_auth`) and `tui_gateway/session_history.py` diffed too.
+- `TranscriptMessage` reads the Codex commentary projection (hermes-agent `b066034eaf`): `reasoning` prefers `display_reasoning` (empty included), and `commentary` holds `display_commentary`. `prefersDisplayReasoningProjection`, `emptyDisplayReasoningHidesRawReasoning` and `readsDisplayCommentary` failed before the change. `gatewayEditToolRowKeepsItsResult` passed before it: it pins the existing behaviour for the edit-tool `content` the gateway now ships.
+- `session.steer` doc: an idle session now answers `"rejected"` (hermes-agent `0641ee1dcd`), which the kit already returns as false. No code change.
+- `swift test`: **473 tests / 65 suites passed** (469 / 65 on `main`).
+- `python3 scripts/check-api-constraints.py`: passed.
+
+### Not run or pending
+
+- Hosted CI, and no live backend check.
+- Not wrapped (optional, no compatibility impact): `session.branch_whole` / `session.branch_stored`, `/api/health` `displayVersion`, `/api/status` `shared_profile_warning`. `response_transformed` and `display_kind: "failed_turn"` are reducer rules for the apps.
+
 ## Privacy manifest branch (`feat/privacy-manifest`)
 
 Run on 2026-09-24, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). For angel12/mercurychat#100: Apple requires an SDK to declare its own required-reason API use in a privacy manifest it ships, and the consuming app's manifest doesn't cover it.
