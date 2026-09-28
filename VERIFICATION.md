@@ -1,6 +1,6 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`) and `0.4.0` (`bd43e91`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`) and `0.4.1` (this branch; tagged after merge). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
 ## Upstream parity branch (`fix/upstream-parity-9a0a162536`)
 
@@ -17,7 +17,8 @@ Run on 2026-09-27, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstre
 
 ### Not run or pending
 
-- No live backend check, and no hosted CI yet (branch not pushed).
+- No live backend check, and Mercury Chat hasn't adopted `0.4.1` yet.
+- Hosted CI and the `0.4.1` tag: pending (the tag is cut on the merge commit after `main` CI passes).
 - Not wrapped (optional, no compatibility impact): `session.archive` (the kit archives through `PATCH /api/sessions/{id}`), `session.resume`/`GET /api/sessions/{id}/messages` `inline_images=false`, `projects.changed`, and the sidebar route's new `failed`/`profiles_failed` slices (the kit reads `/api/profiles/sessions`, not `/sidebar`).
 
 ## Upstream parity branch (`fix/upstream-parity-59004a6235`)
