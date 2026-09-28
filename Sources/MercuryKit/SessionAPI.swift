@@ -67,6 +67,12 @@ extension HermesConnection {
 
     /// `session.create` — `cwd` binds the session to a project directory;
     /// omit for "no workspace". The DB row appears lazily on first prompt.
+    ///
+    /// A `cwd` is always sent as a deliberate pick (`cwd_explicit`), so a
+    /// named profile's `terminal.cwd` doesn't replace it (hermes-agent
+    /// `a9972dc3f9`). A backend from before that change refuses the key with
+    /// 4000 and doesn't override the cwd anyway, so the create is resent
+    /// without it.
     public func createSession(
         cwd: String? = nil, profile: String? = nil, title: String? = nil
     ) async throws -> SessionHandle {
@@ -74,11 +80,23 @@ extension HermesConnection {
             "cols": .number(Double(Self.cols)),
             "source": .string(Self.source),
         ]
-        if let cwd, !cwd.isEmpty { params["cwd"] = .string(cwd) }
+        if let cwd, !cwd.isEmpty {
+            params["cwd"] = .string(cwd)
+            params["cwd_explicit"] = .bool(true)
+        }
         if let profile, !profile.isEmpty { params["profile"] = .string(profile) }
         if let title, !title.isEmpty { params["title"] = .string(title) }
 
-        let result = try await request("session.create", params: .object(params))
+        let result: JSONValue
+        do {
+            result = try await request("session.create", params: .object(params))
+        } catch let error as HermesError
+            where params["cwd_explicit"] != nil && error.isUnknownParameter
+            && error.rpcMessage?.contains("cwd_explicit") == true
+        {
+            params["cwd_explicit"] = nil
+            result = try await request("session.create", params: .object(params))
+        }
         guard let handle = SessionHandle(result: result) else {
             throw HermesError.malformedResponse("session.create returned no session_id")
         }
@@ -521,7 +539,9 @@ extension HermesConnection {
     }
 
     /// `session.delete` — delete a **stored** session and its transcript
-    /// files. The server refuses to delete a session live in this gateway.
+    /// files. The server refuses to delete a session live in this gateway,
+    /// and answers 4023 while a turn or compression anywhere still owns the
+    /// row (hermes-agent `40523600b0`); the row is kept, so keep it listed.
     public func deleteSession(storedID: String, profile: String? = nil) async throws {
         var params: [String: JSONValue] = ["session_id": .string(storedID)]
         if let profile, !profile.isEmpty { params["profile"] = .string(profile) }

@@ -2,7 +2,7 @@
 
 Shared Swift protocol client for Mercury Chat and Mercury Voice, connecting to Hermes Agent.
 
-**Status:** latest release `0.4.0`, which reads hermes-agent's commentary projection on history rows (parity with upstream `59004a6235`). Mercury Chat uses `0.3.1` (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87 and the privacy manifest in #115) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet.
+**Status:** latest release `0.4.1`, which sends a new session's `cwd` as an explicit pick so a named profile's working directory doesn't replace it (parity with upstream `9a0a162536`). Mercury Chat uses `0.3.1` (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87 and the privacy manifest in #115) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet.
 
 ## Platforms
 
@@ -66,6 +66,6 @@ The setting has no effect when the policy is `.disabled` (nothing is ever refuse
 
 - Mercury Chat: `f94bfafb9e6f90b8ff7fb12562a8216083433632` (angel12/mercurychat `main`; adds Bot Mode Phase 1 and 2 from PRs #78 and #79 over `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d`, which added `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)
 - Mercury Voice: `b403c5e19dbfbefdc8109ad403864413571d9c32` (angel12/mercury-voice `main`, PR #126 contract 7, over the original `3792ac146e0299c17295f928661b7339bb625510` reconciliation)
-- hermes-agent: checked against upstream `main` at `59004a6235` (desktop contract 8): the only changes to contracts the kit uses since `67f7e1d6b3` are additive, and the kit reads the new commentary projection on history rows. Bot Mode parity was checked at `9fe737aef2` and the contract-7/8 parity work at `d3b25b52ad`.
+- hermes-agent: checked against upstream `main` at `9a0a162536` (desktop contract 8): since `59004a6235` the only changes to contracts the kit uses are additive, and `session.create` now sends a `cwd` as an explicit pick (`cwd_explicit`), falling back for older backends. `59004a6235` added the commentary projection on history rows. Bot Mode parity was checked at `9fe737aef2` and the contract-7/8 parity work at `d3b25b52ad`.
 
 Consumer cutovers are separate changes after standalone verification. No migration exports or personal service credentials belong in this repository.

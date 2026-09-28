@@ -1,6 +1,25 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`) and `0.4.0` (`bd43e91`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`) and `0.4.1` (this branch; tagged after merge). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+
+## Upstream parity branch (`fix/upstream-parity-9a0a162536`)
+
+Run on 2026-09-27, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstream hermes-agent audited from `59004a6235` to `origin/main` head `9a0a162536` (1,672 commits, fetched fresh, read through `git show`/`git diff`/`git archive` against the ref, never a checkout). `DESKTOP_BACKEND_CONTRACT` is still 8. The newest release tag, `v2026.9.24` (`f97608f178`), predates the changes below; they ship only in the `v0.21.4+canary.20260926*`/`20260927*` canaries.
+
+### Verified
+
+- `apps/shared/src/gateway-contract.openrpc.json` diffed with `$ref`s resolved: no method, server request or notification removed. Added: `session.archive` and `projects.changed`. Of the 59 methods and notifications the kit names, only `session.create`, `session.resume`, `projects.tree` and `projects.project_sessions` changed, all additively (`cwd_explicit`, `inline_images`, `ProjectTreeLane.isGit`, `StoredSessionRow.continuation_kind`). `subagent.list`, `plugins.manage` and `preview.act` changed too; the kit doesn't use them. The REST routers the kit calls (`audio`, `sessions`, `profiles`, `status`, `chat_ws`, `dashboard_auth`) and `tui_gateway/session_history.py` diffed too.
+- `session.create` sends `cwd_explicit: true` with every `cwd`. Since hermes-agent `a9972dc3f9` a named profile's `terminal.cwd` replaces a `cwd` sent without it, which would move Mercury Chat's "New Session" in a project into the profile's directory. Backends from before `66bc259712` refuse the key with 4000 (and don't override the cwd), so the kit resends without it, only when the 4000 names `cwd_explicit`. `aCwdIsSentAsAnExplicitPick` and `anOlderBackendGetsTheCwdWithoutTheFlag` failed before the change; `noCwdSendsNoFlag` and `anotherUnknownKeyIsNotRetried` pin the edges.
+- Param-key audit with `tui_gateway.contracts.registry.validate_params`: `session.create` `{cols, source, cwd, cwd_explicit, profile, title}` passes at `9a0a162536` and is refused at `59004a6235` with the message the fallback matches; the same params without `cwd_explicit` pass at both.
+- Docs only: `session.delete` answers 4023 and `DELETE /api/sessions/{id}` answers 409 while a live turn or compression owns the row (hermes-agent `40523600b0`). The kit already surfaces both as errors.
+- `swift test`: **477 tests / 66 suites passed** (473 / 65 on `main`).
+- `python3 scripts/check-api-constraints.py`: passed.
+
+### Not run or pending
+
+- No live backend check, and Mercury Chat hasn't adopted `0.4.1` yet.
+- Hosted CI and the `0.4.1` tag: pending (the tag is cut on the merge commit after `main` CI passes).
+- Not wrapped (optional, no compatibility impact): `session.archive` (the kit archives through `PATCH /api/sessions/{id}`), `session.resume`/`GET /api/sessions/{id}/messages` `inline_images=false`, `projects.changed`, and the sidebar route's new `failed`/`profiles_failed` slices (the kit reads `/api/profiles/sessions`, not `/sidebar`).
 
 ## Upstream parity branch (`fix/upstream-parity-59004a6235`)
 
