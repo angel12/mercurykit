@@ -1,6 +1,6 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`) and `0.4.1` (this branch; tagged after merge). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87 and `0.3.1` in #115, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`) and `0.4.1` (this branch; tagged after merge). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115 and `0.4.0` in #141, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
 ## Upstream parity branch (`fix/upstream-parity-9a0a162536`)
 
@@ -37,7 +37,7 @@ Run on 2026-09-25, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstre
 
 ### Not run or pending
 
-- No live backend check, and Mercury Chat hasn't adopted `0.4.0` yet.
+- No live backend check. Mercury Chat adopted `0.4.0` later, in angel12/mercurychat#141.
 - Not wrapped (optional, no compatibility impact): `session.branch_whole` / `session.branch_stored`, `/api/health` `displayVersion`, `/api/status` `shared_profile_warning`. `response_transformed` and `display_kind: "failed_turn"` are reducer rules for the apps.
 
 ## Privacy manifest branch (`feat/privacy-manifest`)
