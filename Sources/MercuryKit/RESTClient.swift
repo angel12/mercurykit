@@ -131,7 +131,8 @@ public struct HermesRESTClient: Sendable {
     }
 
     /// `DELETE /api/sessions/{id}` — remove a stored session and its
-    /// transcript files.
+    /// transcript files. A 409 means a live turn or compression still owns
+    /// the row (hermes-agent `40523600b0`); it wasn't deleted.
     public func deleteSession(storedID: String, profile: String? = nil) async throws {
         _ = try await send(
             "DELETE", "/api/sessions/\(encodePathComponent(storedID))",

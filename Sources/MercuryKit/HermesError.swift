@@ -143,4 +143,10 @@ public enum HermesError: Error, LocalizedError, Sendable {
         guard case .rpcError(let code, _, _) = self else { return nil }
         return code
     }
+
+    /// The server's message, for matching which key a 4000 names. Not copy.
+    var rpcMessage: String? {
+        guard case .rpcError(_, let message, _) = self else { return nil }
+        return message
+    }
 }
