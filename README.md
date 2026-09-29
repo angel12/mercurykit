@@ -62,6 +62,22 @@ let connection = HermesConnection(
 
 The setting has no effect when the policy is `.disabled` (nothing is ever refused), on malformed answerable requests (always refused), or on `open_requests` replayed after a reconnect (the app decides).
 
+## Push (Mercury Push)
+
+The kit implements the app side of [Mercury Push](https://github.com/angel12/mercury-push): relay registration, per-profile pairing through the Hermes `mercury_push` plugin, and payload decoding. It is protocol-only.
+
+- **The apps own:** notification permission, `registerForRemoteNotifications`, the `aps-environment` entitlement, the notification delegate, when to pair, the settings UI, and mapping `PushRoute` to a screen.
+- **`PushPairing`** is an actor that sequences everything; mutating calls are serialised in FIFO order. Call `updateDeviceToken(PushPairing.hexToken(data))` on every launch and whenever APNs issues a token. The PUT refreshes the relay's 90-day idle clock. Then call `pair(server:profile:deviceName:)` per Hermes profile.
+- **Recovery rules (kit-owned):**
+  - A relay `401` re-registers once and clears every pairing record, because they belonged to the dead installation. The app should offer to re-pair.
+  - An expired pairing code is retried once with a fresh code.
+  - `syncPairing` drops pairings that Hermes no longer lists, or marks inactive.
+  - `unpair` always removes the local record, and reports `.unpairedLocallyOnly` when Hermes couldn't be told.
+  - `unpairAll` revokes the relay installation without contacting any Hermes server.
+- **Storage:** everything lives in one Keychain item (account `mercury-push`, service injected by the app), device-only and never synchronised. The kit never uses UserDefaults.
+- **Profiles:** the plugin scopes pairing per profile through `?profile=`, which requires angel12/mercury-push#2 or later. `PushDevicesError.pluginNotEnabled` means the plugin is disabled in that profile.
+- **Environment:** the app passes `.sandbox` for Xcode builds and `.production` for TestFlight and App Store builds. The kit never guesses.
+
 ## Source provenance
 
 - Mercury Chat: `f94bfafb9e6f90b8ff7fb12562a8216083433632` (angel12/mercurychat `main`; adds Bot Mode Phase 1 and 2 from PRs #78 and #79 over `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d`, which added `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)
