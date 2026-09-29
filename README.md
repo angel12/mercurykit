@@ -2,7 +2,7 @@
 
 Shared Swift protocol client for Mercury Chat and Mercury Voice, connecting to Hermes Agent.
 
-**Status:** latest release `0.5.0`, which adds protocol-only Mercury Push pairing (see [Push](#push-mercury-push)); `0.4.1` sends a new session's `cwd` as an explicit pick so a named profile's working directory doesn't replace it (parity with upstream `9a0a162536`). Mercury Chat uses `0.4.1` (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87, the privacy manifest in #115, the commentary projection in #141 and the explicit `cwd` in #142) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet.
+**Status:** latest release `0.5.1`, which maps a notification's `device_id` to its pairing (`PushPayload.deviceID`, `PushPairing.pairing(forDeviceID:)`); `0.5.0` adds protocol-only Mercury Push pairing (see [Push](#push-mercury-push)); `0.4.1` sends a new session's `cwd` as an explicit pick so a named profile's working directory doesn't replace it (parity with upstream `9a0a162536`). Mercury Chat uses `0.4.1` (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87, the privacy manifest in #115, the commentary projection in #141 and the explicit `cwd` in #142) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet.
 
 ## Platforms
 
