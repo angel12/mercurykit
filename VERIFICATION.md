@@ -1,6 +1,32 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`) and `0.5.0` (`21d6afa`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`) and `0.5.1` (`5e81deb`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+
+## Push `device_id` routing (`feat/push-device-id`, `0.5.1`)
+
+Run on 2026-09-29 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a). This release lets an app tell which Hermes server and profile a tapped notification belongs to:
+- `PushPayload.deviceID` reads `mercury.device_id`, which the plugin stamps on each delivery (angel12/mercury-push#3, `dea1936`). It is nil for an empty value or a notification from an older plugin.
+- `PushPairing.pairing(forDeviceID:)` returns the matching `PushPairingRecord`. It is an unsynchronised read, like `pairings()`, and returns nil when nothing matches or the Keychain can't be read yet.
+
+It is additive: no existing public signature changed.
+
+### Verified
+
+- `swift test`: **538 tests / 71 suites passed** (534 before the branch), with no warnings. The 4 new tests cover:
+  - decoding a stamped payload fixture in the shape the relay produces;
+  - an absent or empty `device_id` becoming nil;
+  - finding the server and profile for both a named profile and the launch profile, and nil for an unknown id;
+  - nil while the Keychain is unreadable, then the record once it's readable again.
+- `python3 scripts/check-api-constraints.py`: all three checks passed. `Fixtures/ExternalConsumer.swift` uses both new symbols.
+- `actionlint .github/workflows/*.yml`: clean.
+- Hosted CI passed on the pull request (run `36639343616`, `1d46809`) and on `main` after the merge (run `36639483382`, `5e81deb`).
+- Published: merged as angel12/mercurykit#16 (`5e81deb`) and tagged `0.5.1` (annotated) after `main` CI passed. A throwaway package pinned `exact: "0.5.1"` resolves to `5e81deb`, builds, and calls `PushPayload.deviceID` and `PushPairing.pairing(forDeviceID:)`.
+- The deployed relay at `https://mpns.angelsolutionsnm.com` runs `dea1936` and accepts a stamped event: a bogus credential gets `401`, not `422`. The plugin is installed on a Hermes host and reports the relay as reachable.
+
+### Not run or pending
+
+- No live run with a real device: no app has paired yet. That comes with Mercury Chat's adoption.
+- Mercury Chat and Mercury Voice haven't adopted `0.5.1`.
 
 ## Mercury Push pairing (`feat/push-pairing`, `0.5.0`)
 
