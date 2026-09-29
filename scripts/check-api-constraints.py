@@ -5,8 +5,13 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 subprocess.run(['swift', 'build'], cwd=root, check=True)
-bin_path = subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=root, text=True).strip()
-command = ['xcrun', 'swiftc', '-typecheck', '-swift-version', '6', '-I', str(Path(bin_path) / 'Modules')]
+bin_path = Path(subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=root, text=True).strip())
+# Swift 6.1 writes modules to <bin>/Modules; Swift 6.4's build system writes them directly into <bin>.
+candidates = (bin_path / 'Modules', bin_path)
+module_dir = next((d for d in candidates if (d / 'MercuryKit.swiftmodule').exists()), None)
+if module_dir is None:
+    raise RuntimeError('MercuryKit.swiftmodule not found in: ' + ', '.join(str(d) for d in candidates))
+command = ['xcrun', 'swiftc', '-typecheck', '-swift-version', '6', '-I', str(module_dir)]
 subprocess.run(command + [str(root / 'Fixtures/ExternalConsumer.swift')], check=True)
 with tempfile.TemporaryDirectory(prefix='mercurykit-api-') as temp:
     for constraint in ('Encodable', 'Decodable'):
