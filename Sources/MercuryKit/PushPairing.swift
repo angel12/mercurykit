@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Result of `PushPairing.syncPairing`.
 public enum PushPairingStatus: Sendable, Equatable {
@@ -22,6 +23,9 @@ public enum PushPairingError: Error, Sendable, Equatable, LocalizedError {
     case relay(PushRelayError)
     case devices(PushDevicesError)
     case storage(KeychainError)
+    /// The Keychain item couldn't be read (for example before first unlock). Nothing was sent
+    /// to the relay or Hermes and nothing was written; retry later.
+    case storageUnavailable(OSStatus)
 
     public var errorDescription: String? {
         switch self {
@@ -29,6 +33,7 @@ public enum PushPairingError: Error, Sendable, Equatable, LocalizedError {
         case .relay(let error): return error.errorDescription
         case .devices(let error): return error.errorDescription
         case .storage(let error): return error.errorDescription
+        case .storageUnavailable: return "The saved push pairing isn't readable right now. Try again after unlocking the device."
         }
     }
 }
@@ -45,7 +50,8 @@ public actor PushPairing {
     private let store: PushPairingStore
     private let bundleID: String
     private let environment: PushEnvironment
-    private var state: PushPairingState
+    private var state = PushPairingState()
+    private var loaded = false
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
@@ -57,7 +63,6 @@ public actor PushPairing {
         self.store = store
         self.bundleID = bundleID
         self.environment = environment
-        self.state = store.load()
     }
 
     /// `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` data as lowercase hex.
@@ -72,6 +77,7 @@ public actor PushPairing {
     public func updateDeviceToken(_ token: String) async throws {
         await acquire()
         defer { release() }
+        try ensureLoaded()
         let token = token.lowercased()
         guard let id = state.installationID, let secret = state.installationSecret, state.bundleID == bundleID
         else {
@@ -104,8 +110,9 @@ public actor PushPairing {
     ) async throws -> PushPairingRecord {
         await acquire()
         defer { release() }
+        try ensureLoaded()
         guard let token = state.deviceToken else { throw PushPairingError.noDeviceToken }
-        if state.installationID == nil { _ = try await registerFresh(token: token) }
+        // freshCode registers when there's no installation and then uses that registration's code.
         var code = try await freshCode(token: token)
         let pairing: PushDevicePairing
         do {
@@ -134,6 +141,7 @@ public actor PushPairing {
     public func syncPairing(server: HermesRESTClient, profile: String?) async throws -> PushPairingStatus {
         await acquire()
         defer { release() }
+        try ensureLoaded()
         guard let record = record(server: server.endpoint.key, profile: profile) else { return .notPaired }
         let devices: [PushDevice]
         do {
@@ -153,6 +161,7 @@ public actor PushPairing {
     public func unpair(server: HermesRESTClient, profile: String?) async throws -> PushUnpairResult {
         await acquire()
         defer { release() }
+        try ensureLoaded()
         guard let record = record(server: server.endpoint.key, profile: profile) else { return .wasNotPaired }
         var result = PushUnpairResult.unpaired
         do {
@@ -172,6 +181,7 @@ public actor PushPairing {
     public func unpairAll() async throws {
         await acquire()
         defer { release() }
+        try ensureLoaded()
         if let id = state.installationID, let secret = state.installationSecret {
             do {
                 try await relay.delete(installationID: id, secret: secret)
@@ -186,13 +196,34 @@ public actor PushPairing {
         try persist()
     }
 
-    public func pairings() -> [PushPairingRecord] { state.pairings }
+    /// The cached pairings, or `[]` when the Keychain hasn't been readable yet. Tries to load
+    /// if nothing has loaded, ignoring errors.
+    public func pairings() -> [PushPairingRecord] {
+        try? ensureLoaded()
+        return state.pairings
+    }
 
+    /// Whether a pairing is cached; false when the Keychain hasn't been readable yet.
     public func isPaired(server: ServerEndpoint, profile: String?) -> Bool {
-        record(server: server.key, profile: profile) != nil
+        try? ensureLoaded()
+        return record(server: server.key, profile: profile) != nil
     }
 
     // MARK: Internals
+
+    /// Reads the Keychain once it succeeds; each call retries until then. Never treats an
+    /// unreadable item as empty. - Throws: `PushPairingError.storageUnavailable`.
+    private func ensureLoaded() throws {
+        guard !loaded else { return }
+        do {
+            state = try store.load()
+            loaded = true
+        } catch PushPairingStoreError.readFailed(let status) {
+            throw PushPairingError.storageUnavailable(status)
+        } catch {
+            throw PushPairingError.storageUnavailable(errSecInternalError)
+        }
+    }
 
     private func acquire() async {
         if !busy { busy = true; return }

@@ -139,14 +139,18 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
 extension HermesRESTClient {
     static let pushDevicesPath = "/api/plugins/mercury_push/devices"
 
-    /// `POST …/devices?profile=`: pair this relay installation with `profile`. Throws `PushDevicesError`.
+    /// The plugin limits `device_name` to 64 code points; longer names are cut to their first 64 Unicode scalars.
+    static let maxDeviceNameScalars = 64
+
+    /// `POST …/devices?profile=`: pair this relay installation with `profile`. `deviceName` is
+    /// clamped to its first 64 Unicode scalars. Throws `PushDevicesError`.
     public func pairPushDevice(
         profile: String?, installationID: String, pairingCode: String, deviceName: String,
         preferences: PushPreferences?
     ) async throws -> PushDevicePairing {
         var body: [String: JSONValue] = [
             "installation_id": .string(installationID), "pairing_code": .string(pairingCode),
-            "device_name": .string(deviceName),
+            "device_name": .string(String(deviceName.unicodeScalars.prefix(Self.maxDeviceNameScalars))),
         ]
         if let preferences { body["preferences"] = preferences.json }
         let json = try await pushRequest("POST", Self.pushDevicesPath, profile: profile, body: .object(body))

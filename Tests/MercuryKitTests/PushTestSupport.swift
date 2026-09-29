@@ -24,6 +24,8 @@ final class InMemoryKeychain: @unchecked Sendable {
     private var items: [String: Data] = [:]  // "service|account" → value
     private var _lastAddAttributes: [String: Any] = [:]
     var failWrites: OSStatus?
+    /// When set, every read returns this status and no data (e.g. errSecInteractionNotAllowed before first unlock).
+    var failReads: OSStatus?
 
     var lastAddAttributes: [String: Any] { lock.withLock { _lastAddAttributes } }
 
@@ -70,6 +72,7 @@ final class InMemoryKeychain: @unchecked Sendable {
     var read: PushPairingStore.Read {
         { [self] query in
             lock.withLock {
+                if let failReads { return (failReads, nil) }
                 let data = items[Self.key(query as? [String: Any] ?? [:])]
                 return (data == nil ? errSecItemNotFound : errSecSuccess, data)
             }
@@ -94,6 +97,9 @@ final class FakePushBackend: @unchecked Sendable {
     var failNextPutWith500 = false
     var expireNextCodeOnClaim = false
     var pluginStatusOverride: (Int, String)?
+    /// The `device_name` of the most recent pairing claim.
+    private var _lastDeviceName: String?
+    var lastDeviceName: String? { lock.withLock { _lastDeviceName } }
 
     private var _log: [String] = []
     /// "METHOD path?query" in arrival order.
@@ -172,6 +178,7 @@ final class FakePushBackend: @unchecked Sendable {
         let base = "/api/plugins/mercury_push/devices"
         if method == "POST", path == base {
             let code = body["pairing_code"]?.stringValue ?? ""
+            _lastDeviceName = body["device_name"]?.stringValue
             if expireNextCodeOnClaim { expireNextCodeOnClaim = false; codes[code] = nil }
             guard let installation = codes.removeValue(forKey: code), installations[installation] != nil else {
                 return .init(502, #"{"error":"relay_error","relay_error":"pairing_code_invalid"}"#)

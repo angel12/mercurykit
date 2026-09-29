@@ -40,6 +40,32 @@ public struct PushPairingState: Sendable, Equatable, Codable {
     }
 }
 
+/// Errors from reading the Mercury Push Keychain item. Descriptions carry no data.
+public enum PushPairingStoreError: Error, Sendable, Equatable, LocalizedError {
+    /// The Keychain read failed with this `OSStatus` (for example `errSecInteractionNotAllowed`
+    /// before first unlock). The item may well exist; try again later.
+    case readFailed(OSStatus)
+
+    public var errorDescription: String? {
+        switch self {
+        case .readFailed(let status): return "Couldn't read the saved push pairing from the Keychain (status \(status))."
+        }
+    }
+}
+
+extension PushPairingState: CustomReflectable {
+    public var customMirror: Mirror {
+        Mirror(self, children: [
+            "installationID": installationID as Any,
+            "installationSecret": installationSecret == nil ? "nil" : "<redacted>",
+            "bundleID": bundleID as Any,
+            "environment": environment as Any,
+            "deviceToken": deviceToken as Any,
+            "pairings": pairings,
+        ], displayStyle: .struct)
+    }
+}
+
 extension PushPairingState: CustomStringConvertible, CustomDebugStringConvertible {
     public var description: String {
         "PushPairingState(installation: \(installationID ?? "none"), secret: \(installationSecret == nil ? "none" : "<redacted>"), "
@@ -72,16 +98,29 @@ public struct PushPairingStore: Sendable {
         self.read = read
     }
 
-    /// The stored state, or an empty state when there's no item or it can't be decoded.
-    public func load() -> PushPairingState {
+    /// The stored state.
+    ///
+    /// Returns an empty state when there is no item, and also when the item exists but can't be
+    /// decoded (overwriting it with a fresh save is the only recovery for a corrupt item).
+    /// Any other Keychain failure, such as `errSecInteractionNotAllowed` before first unlock,
+    /// throws: an unreadable item must never be mistaken for an empty one.
+    /// - Throws: `PushPairingStoreError.readFailed`.
+    public func load() throws -> PushPairingState {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         let (status, data) = read(query as CFDictionary)
-        guard status == errSecSuccess, let data,
-            let state = try? JSONDecoder().decode(PushPairingState.self, from: data)
-        else { return PushPairingState() }
-        return state
+        switch status {
+        case errSecSuccess:
+            guard let data, let state = try? JSONDecoder().decode(PushPairingState.self, from: data) else {
+                return PushPairingState()
+            }
+            return state
+        case errSecItemNotFound:
+            return PushPairingState()
+        default:
+            throw PushPairingStoreError.readFailed(status)
+        }
     }
 
     /// - Throws: `KeychainError.encodingFailed` or `.writeFailed`.

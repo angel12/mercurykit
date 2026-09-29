@@ -170,7 +170,7 @@ func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceTo
     _ = await pairing.isPaired(server: endpoint, profile: nil)
     _ = await pairing.pairings()
     try await pairing.unpairAll()
-    let state: PushPairingState = store.load()
+    let state: PushPairingState = try store.load()
     _ = (state.installationID, state.pairings.first?.profile)
 
     _ = try await rest.pushDevices(profile: nil)
@@ -188,7 +188,8 @@ func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceTo
     }
     let errors: [Error] = [
         PushPairingError.noDeviceToken, PushRelayError.rateLimited(retryAfter: 1),
-        PushDevicesError.pluginNotEnabled(profile: "coder"),
+        PushDevicesError.pluginNotEnabled(profile: "coder"), PushPairingError.storageUnavailable(0),
+        PushPairingStoreError.readFailed(0),
     ]
     _ = errors.map(\.localizedDescription)
 }

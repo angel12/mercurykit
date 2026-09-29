@@ -17,6 +17,12 @@ public struct PushPairingCode: Sendable, Equatable {
     }
 }
 
+extension PushPairingCode: CustomReflectable {
+    public var customMirror: Mirror {
+        Mirror(self, children: ["code": "<redacted>", "expiresAt": expiresAt], displayStyle: .struct)
+    }
+}
+
 extension PushPairingCode: CustomStringConvertible, CustomDebugStringConvertible {
     public var description: String { "PushPairingCode(<redacted>, expiresAt: \(expiresAt))" }
     public var debugDescription: String { description }
@@ -32,6 +38,14 @@ public struct PushRegistration: Sendable, Equatable {
         self.installationID = installationID
         self.installationSecret = installationSecret
         self.pairingCode = pairingCode
+    }
+}
+
+extension PushRegistration: CustomReflectable {
+    public var customMirror: Mirror {
+        Mirror(self, children: [
+            "installationID": installationID, "installationSecret": "<redacted>", "pairingCode": pairingCode,
+        ], displayStyle: .struct)
     }
 }
 

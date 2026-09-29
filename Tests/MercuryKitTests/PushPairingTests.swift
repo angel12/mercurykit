@@ -39,7 +39,7 @@ struct PushPairingTests {
     @Test func firstTokenRegistersAndPersists() async throws {
         let h = try await Self.harness(); defer { h.server.stop() }
         try await h.coordinator().updateDeviceToken(Self.tokenA.uppercased())
-        let state = h.store.load()
+        let state = (try h.store.load())
         let id = try #require(state.installationID)
         #expect(h.backend.installation(id)?.token == Self.tokenA)  // lowercased
         #expect(state.bundleID == Self.bundle)
@@ -53,7 +53,7 @@ struct PushPairingTests {
         try await pairing.updateDeviceToken(Self.tokenA)
         try await pairing.updateDeviceToken(Self.tokenA)
         try await pairing.updateDeviceToken(Self.tokenB)
-        let id = try #require(h.store.load().installationID)
+        let id = try #require((try h.store.load()).installationID)
         #expect(h.backend.installationCount == 1)
         #expect(h.backend.log.filter { $0.hasPrefix("PUT") }.count == 2)
         #expect(h.backend.installation(id)?.token == Self.tokenB)
@@ -63,9 +63,9 @@ struct PushPairingTests {
         let h = try await Self.harness(); defer { h.server.stop() }
         try await h.coordinator(environment: .sandbox).updateDeviceToken(Self.tokenA)
         try await h.coordinator(environment: .production).updateDeviceToken(Self.tokenA)
-        let id = try #require(h.store.load().installationID)
+        let id = try #require((try h.store.load()).installationID)
         #expect(h.backend.installation(id)?.environment == "production")
-        #expect(h.store.load().environment == .production)
+        #expect((try h.store.load()).environment == .production)
     }
 
     @Test func bundleChangeReregistersAndClearsPairings() async throws {
@@ -73,9 +73,9 @@ struct PushPairingTests {
         let chat = h.coordinator()
         try await chat.updateDeviceToken(Self.tokenA)
         _ = try await chat.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
-        let first = try #require(h.store.load().installationID)
+        let first = try #require((try h.store.load()).installationID)
         try await h.coordinator(bundle: "com.spencermcguire.mercuryvoice.app").updateDeviceToken(Self.tokenA)
-        let state = h.store.load()
+        let state = (try h.store.load())
         #expect(state.installationID != first)
         #expect(state.bundleID == "com.spencermcguire.mercuryvoice.app")
         #expect(state.pairings.isEmpty)
@@ -86,10 +86,10 @@ struct PushPairingTests {
         let pairing = h.coordinator()
         try await pairing.updateDeviceToken(Self.tokenA)
         _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
-        let first = try #require(h.store.load().installationID)
+        let first = try #require((try h.store.load()).installationID)
         h.backend.failNextPutWith401 = true
         try await pairing.updateDeviceToken(Self.tokenA)
-        let state = h.store.load()
+        let state = (try h.store.load())
         #expect(state.installationID != first)
         #expect(state.pairings.isEmpty)
         #expect(await pairing.pairings().isEmpty)
@@ -134,10 +134,10 @@ struct PushPairingTests {
         let h = try await Self.harness(); defer { h.server.stop() }
         let pairing = h.coordinator()
         try await pairing.updateDeviceToken(Self.tokenA)
-        let first = try #require(h.store.load().installationID)
+        let first = try #require((try h.store.load()).installationID)
         h.backend.failNextNewCodeWith401 = true
         let record = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
-        let state = h.store.load()
+        let state = (try h.store.load())
         #expect(state.installationID != first)
         #expect(state.pairings == [record])
     }
@@ -170,7 +170,7 @@ struct PushPairingTests {
         let second = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
         h.backend.removeDevice(second.deviceID)
         #expect(try await pairing.syncPairing(server: h.hermes, profile: "coder") == .notPaired)
-        #expect(h.store.load().pairings.isEmpty)
+        #expect((try h.store.load()).pairings.isEmpty)
     }
 
     @Test func unpairOutcomes() async throws {
@@ -203,21 +203,21 @@ struct PushPairingTests {
         let pairing = h.coordinator()
         try await pairing.updateDeviceToken(Self.tokenA)
         _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
-        let id = try #require(h.store.load().installationID)
+        let id = try #require((try h.store.load()).installationID)
         try await pairing.unpairAll()
         #expect(h.backend.installation(id) == nil)
-        let state = h.store.load()
+        let state = (try h.store.load())
         #expect(state.installationID == nil)
         #expect(state.installationSecret == nil)
         #expect(state.pairings.isEmpty)
         #expect(state.deviceToken == Self.tokenA)
         // pairing again re-registers without a new token
         let record = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
-        #expect(h.store.load().pairings == [record])
+        #expect((try h.store.load()).pairings == [record])
         // an installation the relay already dropped is fine (relay 401 → treated as gone)
-        h.backend.dropInstallation(try #require(h.store.load().installationID))
+        h.backend.dropInstallation(try #require((try h.store.load()).installationID))
         try await pairing.unpairAll()
-        #expect(h.store.load().installationID == nil)
+        #expect((try h.store.load()).installationID == nil)
     }
 
     @Test func storageFailureSurfaces() async throws {
@@ -232,7 +232,7 @@ struct PushPairingTests {
         let h = try await Self.harness(); defer { h.server.stop() }
         let pairing = h.coordinator()
         try await pairing.updateDeviceToken(Self.tokenA)
-        let secret = try #require(h.store.load().installationSecret)
+        let secret = try #require((try h.store.load()).installationSecret)
         var caught: [PushPairingError] = []
         h.backend.failNextPutWith500 = true
         do { try await pairing.updateDeviceToken(Self.tokenA) } catch let e as PushPairingError { caught.append(e) }
@@ -265,7 +265,7 @@ struct PushPairingTests {
         async let b = pairing.pair(server: h.hermes, profile: "b", deviceName: "iPhone")
         _ = try await (a, b)
         #expect(await pairing.pairings().count == 2)
-        #expect(h.store.load().pairings.count == 2)
+        #expect((try h.store.load()).pairings.count == 2)
     }
 
     @Test func pairAndUnpairAllStayConsistent() async throws {
@@ -275,7 +275,7 @@ struct PushPairingTests {
         async let p = pairing.pair(server: h.hermes, profile: "a", deviceName: "iPhone")
         async let u: Void = pairing.unpairAll()
         _ = try await (p, u)
-        let state = h.store.load()
+        let state = (try h.store.load())
         if state.pairings.isEmpty {
             #expect(state.installationID == nil)
         } else {
@@ -298,7 +298,69 @@ struct PushPairingTests {
             guard case .relay = error else { Issue.record("expected .relay, got \(error)"); return }
         }
         #expect(await pairing.pairings().isEmpty)
-        #expect(h.store.load().installationID == nil)
-        #expect(h.store.load().pairings.isEmpty)
+        #expect((try h.store.load()).installationID == nil)
+        #expect((try h.store.load()).pairings.isEmpty)
+    }
+
+    // MARK: Unreadable Keychain
+
+    @Test func unreadableKeychainNeverRegistersOrOverwrites() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        try await h.coordinator().updateDeviceToken(Self.tokenA)
+        let stored = try #require(h.keychain.storedValue(service: "com.test.push", account: "mercury-push"))
+        let id = try #require((try h.store.load()).installationID)
+        let before = h.backend.log.count
+
+        let pairing = h.coordinator()  // fresh process: Keychain locked before first unlock
+        h.keychain.failReads = errSecInteractionNotAllowed
+        let locked = PushPairingError.storageUnavailable(errSecInteractionNotAllowed)
+        await #expect(throws: locked) { try await pairing.updateDeviceToken(Self.tokenB) }
+        await #expect(throws: locked) { _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone") }
+        await #expect(throws: locked) { _ = try await pairing.syncPairing(server: h.hermes, profile: nil) }
+        await #expect(throws: locked) { _ = try await pairing.unpair(server: h.hermes, profile: nil) }
+        await #expect(throws: locked) { try await pairing.unpairAll() }
+        #expect(await pairing.pairings().isEmpty)
+        #expect(!(await pairing.isPaired(server: h.hermes.endpoint, profile: nil)))
+
+        #expect(h.backend.log.count == before)  // no network calls at all
+        #expect(!h.backend.log.dropFirst(before).contains { $0 == "POST /v1/installations" })
+        #expect(h.keychain.storedValue(service: "com.test.push", account: "mercury-push") == stored)
+
+        h.keychain.failReads = nil  // unlocked: the next call retries the read and reuses the installation
+        try await pairing.updateDeviceToken(Self.tokenB)
+        #expect(h.backend.log.dropFirst(before).map { $0.components(separatedBy: "?")[0] } == ["PUT /v1/installations/\(id)"])
+        #expect(h.backend.installationCount == 1)
+        #expect(h.backend.installation(id)?.token == Self.tokenB)
+    }
+
+    @Test func storageUnavailableDescriptionCarriesNoData() {
+        let text = PushPairingError.storageUnavailable(errSecInteractionNotAllowed).errorDescription ?? ""
+        #expect(!text.isEmpty)
+    }
+
+    // MARK: Pair details
+
+    @Test func deviceNameIsClampedTo64Scalars() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        let long = String(repeating: "\u{1F600}", count: 70)
+        _ = try await pairing.pair(server: h.hermes, profile: nil, deviceName: long)
+        #expect(h.backend.lastDeviceName?.unicodeScalars.count == 64)
+        #expect(h.backend.lastDeviceName == String(long.unicodeScalars.prefix(64)))
+        _ = try await pairing.pair(server: h.hermes, profile: nil, deviceName: "iPhone")
+        #expect(h.backend.lastDeviceName == "iPhone")
+    }
+
+    @Test func pairWithoutInstallationUsesRegistrationCode() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        try await pairing.unpairAll()
+        let before = h.backend.log.count
+        _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        let calls = h.backend.log.dropFirst(before)
+        #expect(calls.filter { $0 == "POST /v1/installations" }.count == 1)
+        #expect(calls.filter { $0.hasSuffix("/pairing-codes") }.isEmpty)
     }
 }
