@@ -150,3 +150,46 @@ func adoptProfileEditor(connection: HermesConnection, row: JSONValue) async thro
     _ = ModelInventory.Provider(slug: "s", name: "n", models: [], isCurrent: true, authenticated: nil, warning: nil, unavailableModels: [])
     _ = ModelInventory(json: row)
 }
+
+// Mercury Push API an app uses without @testable: every symbol below must be public.
+func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceToken: Data) async throws {
+    let store = PushPairingStore(service: "com.example.push")
+    let pairing = PushPairing(
+        relay: PushRelayClient(baseURL: PushRelayClient.defaultBaseURL), store: store,
+        bundleID: "com.example.app", environment: .sandbox)
+    try await pairing.updateDeviceToken(PushPairing.hexToken(deviceToken))
+    let record: PushPairingRecord = try await pairing.pair(
+        server: rest, profile: "coder", deviceName: "iPhone", preferences: PushPreferences(cron: false))
+    _ = record.deviceID
+    switch try await pairing.syncPairing(server: rest, profile: "coder") {
+    case .paired(let device): _ = (device.active, device.preferences.approval, device.lastDeliveryAt)
+    case .notPaired: break
+    }
+    let result: PushUnpairResult = try await pairing.unpair(server: rest, profile: "coder")
+    _ = result == .unpairedLocallyOnly
+    _ = await pairing.isPaired(server: endpoint, profile: nil)
+    _ = await pairing.pairings()
+    try await pairing.unpairAll()
+    let state: PushPairingState = try store.load()
+    _ = (state.installationID, state.pairings.first?.profile)
+
+    _ = try await rest.pushDevices(profile: nil)
+    _ = try await rest.sendTestPush(profile: nil, deviceID: "dev_1")
+    _ = try await rest.updatePushPreferences(profile: nil, deviceID: "dev_1", PushPreferences())
+    try await rest.unpairPushDevice(profile: nil, deviceID: "dev_1")
+
+    if let payload = PushPayload(userInfo: [:]) {
+        switch payload.route {
+        case .session(let id, let profile): _ = (id, profile)
+        case .sessionKey(let key, let profile): _ = (key, profile)
+        case .none: break
+        }
+        _ = payload.kind == .approval
+    }
+    let errors: [Error] = [
+        PushPairingError.noDeviceToken, PushRelayError.rateLimited(retryAfter: 1),
+        PushDevicesError.pluginNotEnabled(profile: "coder"), PushPairingError.storageUnavailable(0),
+        PushPairingStoreError.readFailed(0),
+    ]
+    _ = errors.map(\.localizedDescription)
+}
