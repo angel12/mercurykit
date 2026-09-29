@@ -230,15 +230,75 @@ struct PushPairingTests {
 
     @Test func errorDescriptionsNeverContainSecrets() async throws {
         let h = try await Self.harness(); defer { h.server.stop() }
-        try await h.coordinator().updateDeviceToken(Self.tokenA)
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
         let secret = try #require(h.store.load().installationSecret)
-        let errors: [PushPairingError] = [
-            .noDeviceToken, .relay(.credentialInvalid), .devices(.relayError(code: "x")),
-            .storage(.encodingFailed),
-        ]
-        for error in errors {
-            #expect(!(error.errorDescription ?? "").contains(secret))
-            #expect(!String(describing: error).contains(secret))
+        var caught: [PushPairingError] = []
+        h.backend.failNextPutWith500 = true
+        do { try await pairing.updateDeviceToken(Self.tokenA) } catch let e as PushPairingError { caught.append(e) }
+        h.backend.pluginStatusOverride = (409, #"{"error":"plugin_not_enabled","profile":"x"}"#)
+        do { _ = try await pairing.pair(server: h.hermes, profile: "x", deviceName: "iPhone") } catch let e as PushPairingError { caught.append(e) }
+        #expect(caught.count == 2)
+        let code = "CODE_"  // fake codes are all CODE_<n>
+        for error in caught {
+            for text in [error.errorDescription ?? "", String(describing: error)] {
+                #expect(!text.contains(secret))
+                #expect(!text.contains(code))
+            }
         }
+    }
+
+    @Test func concurrentTokenUpdatesRegisterOnce() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        async let a: Void = pairing.updateDeviceToken(Self.tokenA)
+        async let b: Void = pairing.updateDeviceToken(Self.tokenA)
+        _ = try await (a, b)
+        #expect(h.backend.installationCount == 1)
+    }
+
+    @Test func concurrentPairsBothRecorded() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        async let a = pairing.pair(server: h.hermes, profile: "a", deviceName: "iPhone")
+        async let b = pairing.pair(server: h.hermes, profile: "b", deviceName: "iPhone")
+        _ = try await (a, b)
+        #expect(await pairing.pairings().count == 2)
+        #expect(h.store.load().pairings.count == 2)
+    }
+
+    @Test func pairAndUnpairAllStayConsistent() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        async let p = pairing.pair(server: h.hermes, profile: "a", deviceName: "iPhone")
+        async let u: Void = pairing.unpairAll()
+        _ = try await (p, u)
+        let state = h.store.load()
+        if state.pairings.isEmpty {
+            #expect(state.installationID == nil)
+        } else {
+            #expect(state.installationID != nil)
+        }
+        #expect(!(state.installationID == nil && !state.pairings.isEmpty))
+    }
+
+    @Test func failedReregistrationLeavesNoStalePairings() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        h.backend.failNextPutWith401 = true
+        h.backend.failNextRegisterWith500 = true
+        do {
+            try await pairing.updateDeviceToken(Self.tokenA)
+            Issue.record("expected throw")
+        } catch let error as PushPairingError {
+            guard case .relay = error else { Issue.record("expected .relay, got \(error)"); return }
+        }
+        #expect(await pairing.pairings().isEmpty)
+        #expect(h.store.load().installationID == nil)
+        #expect(h.store.load().pairings.isEmpty)
     }
 }

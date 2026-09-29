@@ -37,14 +37,17 @@ public enum PushPairingError: Error, Sendable, Equatable, LocalizedError {
 /// profiles, applying the relay's and the plugin's recovery rules. It owns protocol only: the
 /// app requests permission, registers for remote notifications, and decides when to pair.
 ///
-/// Calls are serialised by the actor, but they interleave across `await`s. Apps should drive
-/// pairing from one place, such as a settings screen, rather than concurrently.
+/// Mutating calls (`updateDeviceToken`, `pair`, `syncPairing`, `unpair`, `unpairAll`) are
+/// serialised in FIFO order, so concurrent callers never interleave across network awaits.
+/// `pairings()` and `isPaired` are unsynchronised reads of the current state.
 public actor PushPairing {
     private let relay: PushRelayClient
     private let store: PushPairingStore
     private let bundleID: String
     private let environment: PushEnvironment
     private var state: PushPairingState
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     public init(
         relay: PushRelayClient = PushRelayClient(), store: PushPairingStore, bundleID: String,
@@ -67,6 +70,8 @@ public actor PushPairing {
     /// A relay 401 re-registers once and clears every pairing record (the app should re-pair).
     /// - Throws: `PushPairingError`.
     public func updateDeviceToken(_ token: String) async throws {
+        await acquire()
+        defer { release() }
         let token = token.lowercased()
         guard let id = state.installationID, let secret = state.installationSecret, state.bundleID == bundleID
         else {
@@ -78,6 +83,9 @@ public actor PushPairing {
                 installationID: id, secret: secret, deviceToken: token,
                 environment: state.environment == environment ? nil : environment)
         } catch PushRelayError.credentialInvalid {
+            // Dead installation: forget it (and its pairings) before re-registering.
+            state = PushPairingState(bundleID: state.bundleID, environment: state.environment, deviceToken: state.deviceToken)
+            try persist()
             _ = try await registerFresh(token: token)
             return
         } catch let error as PushRelayError {
@@ -94,6 +102,8 @@ public actor PushPairing {
     public func pair(
         server: HermesRESTClient, profile: String?, deviceName: String, preferences: PushPreferences? = nil
     ) async throws -> PushPairingRecord {
+        await acquire()
+        defer { release() }
         guard let token = state.deviceToken else { throw PushPairingError.noDeviceToken }
         if state.installationID == nil { _ = try await registerFresh(token: token) }
         var code = try await freshCode(token: token)
@@ -122,6 +132,8 @@ public actor PushPairing {
     /// record if not. No network call when there is no local record.
     /// - Throws: `PushPairingError`.
     public func syncPairing(server: HermesRESTClient, profile: String?) async throws -> PushPairingStatus {
+        await acquire()
+        defer { release() }
         guard let record = record(server: server.endpoint.key, profile: profile) else { return .notPaired }
         let devices: [PushDevice]
         do {
@@ -139,6 +151,8 @@ public actor PushPairing {
     /// Unpairs `profile` on `server`. The local record is removed even when Hermes can't be told.
     /// - Throws: `PushPairingError.storage` only.
     public func unpair(server: HermesRESTClient, profile: String?) async throws -> PushUnpairResult {
+        await acquire()
+        defer { release() }
         guard let record = record(server: server.endpoint.key, profile: profile) else { return .wasNotPaired }
         var result = PushUnpairResult.unpaired
         do {
@@ -156,6 +170,8 @@ public actor PushPairing {
     /// The device token, bundle and environment are kept so `pair` can re-register right away.
     /// - Throws: `PushPairingError`.
     public func unpairAll() async throws {
+        await acquire()
+        defer { release() }
         if let id = state.installationID, let secret = state.installationSecret {
             do {
                 try await relay.delete(installationID: id, secret: secret)
@@ -177,6 +193,15 @@ public actor PushPairing {
     }
 
     // MARK: Internals
+
+    private func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }  // ownership is handed over on resume
+    }
+
+    private func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
 
     private func record(server: String, profile: String?) -> PushPairingRecord? {
         state.pairings.first { $0.server == server && $0.profile == (profile ?? "") }

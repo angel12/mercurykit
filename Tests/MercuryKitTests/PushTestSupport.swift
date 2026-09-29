@@ -90,6 +90,8 @@ final class FakePushBackend: @unchecked Sendable {
     /// Knobs (consumed once each).
     var failNextPutWith401 = false
     var failNextNewCodeWith401 = false
+    var failNextRegisterWith500 = false
+    var failNextPutWith500 = false
     var expireNextCodeOnClaim = false
     var pluginStatusOverride: (Int, String)?
 
@@ -132,6 +134,7 @@ final class FakePushBackend: @unchecked Sendable {
     private func relay(_ method: String, _ path: String, _ body: JSONValue, _ bearer: String?) -> RoutedHTTPServer.Response {
         let unauthorized = RoutedHTTPServer.Response(401, #"{"error":"credential_invalid","message":"x"}"#)
         if method == "POST", path == "/v1/installations" {
+            if failNextRegisterWith500 { failNextRegisterWith500 = false; return .init(500, #"{"error":"boom"}"#) }
             let id = next("inst")
             let secret = next("secret")
             installations[id] = Installation(
@@ -149,6 +152,7 @@ final class FakePushBackend: @unchecked Sendable {
         switch (method, segments.count) {
         case ("PUT", 3):
             if failNextPutWith401 { failNextPutWith401 = false; return unauthorized }
+            if failNextPutWith500 { failNextPutWith500 = false; return .init(500, #"{"error":"boom"}"#) }
             if let token = body["device_token"]?.stringValue { installations[id]?.token = token }
             if let env = body["environment"]?.stringValue { installations[id]?.environment = env }
             return .init(200, #"{"ok":true}"#)
