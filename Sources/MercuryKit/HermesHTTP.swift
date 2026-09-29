@@ -38,4 +38,16 @@ enum HermesHTTP {
         }
         return json
     }
+
+    /// Status, headers and body for ANY status, for callers that map error bodies themselves
+    /// (Mercury Push). Error bodies are capped exactly as `performJSON` caps them.
+    static func load(
+        _ request: URLRequest, on session: URLSession
+    ) async throws -> (HTTPURLResponse, Data) {
+        let (data, response) = try await HTTPErrorDetail.load(request, on: session)
+        guard let http = response as? HTTPURLResponse else {
+            throw HermesError.malformedResponse("not an HTTP response")
+        }
+        return (http, data)
+    }
 }
