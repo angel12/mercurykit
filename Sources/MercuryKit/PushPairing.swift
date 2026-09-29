@@ -213,6 +213,13 @@ public actor PushPairing {
         return state.pairings
     }
 
+    /// The pairing a notification's `PushPayload.deviceID` belongs to, or nil when none matches
+    /// or the Keychain hasn't been readable yet. An unsynchronised read, like `pairings()`.
+    public func pairing(forDeviceID deviceID: String) -> PushPairingRecord? {
+        try? ensureLoaded()
+        return state.pairings.first { $0.deviceID == deviceID }
+    }
+
     /// Whether a pairing is cached; false when the Keychain hasn't been readable yet.
     public func isPaired(server: ServerEndpoint, profile: String?) -> Bool {
         try? ensureLoaded()

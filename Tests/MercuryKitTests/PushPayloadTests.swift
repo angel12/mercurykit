@@ -10,6 +10,7 @@ struct PushPayloadTests {
     static let responseReady = #"{"aps":{"alert":{"title":"Hermes","body":"x"},"sound":"default","mutable-content":1,"interruption-level":"active","thread-id":"20260929_101500_abc"},"mercury":{"v":1,"kind":"response_ready","event_id":"3f2b1c9e-8d7a-4b6c-9e5f-1a2b3c4d5e6f","profile":"coder","session_id":"20260929_101500_abc"}}"#
     static let cron = #"{"aps":{"alert":{"title":"Hermes","body":"x"},"sound":"default","mutable-content":1,"interruption-level":"active","thread-id":"cron-job123"},"mercury":{"v":1,"kind":"cron","event_id":"3f2b1c9e-8d7a-4b6c-9e5f-1a2b3c4d5e6f","profile":"default","cron_job":"Morning brief"}}"#
     static let test = #"{"aps":{"alert":{"title":"Hermes","body":"x"},"sound":"default","mutable-content":1,"interruption-level":"active"},"mercury":{"v":1,"kind":"test","event_id":"3f2b1c9e-8d7a-4b6c-9e5f-1a2b3c4d5e6f","profile":"default"}}"#
+    static let stampedApproval = #"{"aps":{"alert":{"title":"Hermes","body":"x"},"sound":"default","mutable-content":1,"interruption-level":"time-sensitive","thread-id":"20260929_101500_abc"},"mercury":{"v":1,"kind":"approval","event_id":"3f2b1c9e-8d7a-4b6c-9e5f-1a2b3c4d5e6f","profile":"coder","session_id":"20260929_101500_abc","request_id":"req-1","device_id":"dev_ab12cd34ef56ab78"}}"#
 
     /// What UNNotificationContent.userInfo looks like: JSONSerialization output.
     static func userInfo(_ json: String) -> [AnyHashable: Any] {
@@ -72,5 +73,17 @@ struct PushPayloadTests {
         #expect(PushPayload(userInfo: ["mercury": ["kind": "approval", "profile": "p"]]) == nil)  // no event_id
         #expect(PushPayload(userInfo: ["mercury": ["event_id": "e", "profile": "p"]]) == nil)  // no kind
         #expect(PushPayload(userInfo: ["mercury": ["kind": "test", "event_id": "e"]]) == nil)  // no profile
+    }
+
+    @Test func decodesDeviceID() throws {
+        let payload = try #require(PushPayload(userInfo: Self.userInfo(Self.stampedApproval)))
+        #expect(payload.deviceID == "dev_ab12cd34ef56ab78")
+        #expect(payload.profile == "coder")
+    }
+
+    @Test func deviceIDIsOptional() throws {
+        #expect(try #require(PushPayload(userInfo: Self.userInfo(Self.approval))).deviceID == nil)
+        let info: [AnyHashable: Any] = ["mercury": ["v": 1, "kind": "test", "event_id": "e", "profile": "p", "device_id": ""]]
+        #expect(PushPayload(userInfo: info)?.deviceID == nil)
     }
 }

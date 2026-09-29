@@ -363,4 +363,28 @@ struct PushPairingTests {
         #expect(calls.filter { $0 == "POST /v1/installations" }.count == 1)
         #expect(calls.filter { $0.hasSuffix("/pairing-codes") }.isEmpty)
     }
+
+    @Test func pairingForDeviceIDFindsServerAndProfile() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        let coder = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        let launch = try await pairing.pair(server: h.hermes, profile: nil, deviceName: "iPhone")
+        #expect(await pairing.pairing(forDeviceID: coder.deviceID) == coder)
+        #expect(await pairing.pairing(forDeviceID: launch.deviceID)?.profile == "")
+        #expect(await pairing.pairing(forDeviceID: coder.deviceID)?.server == h.hermes.endpoint.key)
+        #expect(await pairing.pairing(forDeviceID: "dev_unknown") == nil)
+    }
+
+    @Test func pairingForDeviceIDIsNilWhileKeychainUnreadable() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let first = h.coordinator()
+        try await first.updateDeviceToken(Self.tokenA)
+        let record = try await first.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        h.keychain.failReads = errSecInteractionNotAllowed
+        let fresh = h.coordinator()  // new instance: nothing cached yet
+        #expect(await fresh.pairing(forDeviceID: record.deviceID) == nil)
+        h.keychain.failReads = nil
+        #expect(await fresh.pairing(forDeviceID: record.deviceID) == record)
+    }
 }

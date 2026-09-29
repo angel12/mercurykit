@@ -40,6 +40,9 @@ public struct PushPayload: Sendable, Equatable {
     public let sessionKey: String?
     public let requestID: String?
     public let cronJob: String?
+    /// The pairing this copy of the notification was delivered for (the plugin's device id).
+    /// Map it with `PushPairing.pairing(forDeviceID:)` to find the server and profile. Nil from older plugins.
+    public let deviceID: String?
 
     /// Returns nil when `userInfo` has no well-formed `mercury` block.
     public init?(userInfo: [AnyHashable: Any]) {
@@ -58,6 +61,7 @@ public struct PushPayload: Sendable, Equatable {
         self.sessionKey = text("session_key")
         self.requestID = text("request_id")
         self.cronJob = text("cron_job")
+        self.deviceID = text("device_id")
     }
 
     /// Prefer the stored session id, then the routing key, else no session.
