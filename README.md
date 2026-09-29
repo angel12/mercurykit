@@ -78,6 +78,7 @@ The kit implements the app side of [Mercury Push](https://github.com/angel12/mer
 - **One instance:** use one `PushPairing` per process and Keychain service. Pass profiles consistently: `nil` and `"default"` are different local records.
 - **Profiles:** the plugin scopes pairing per profile through `?profile=`, which requires angel12/mercury-push#2 or later. `PushDevicesError.pluginNotEnabled` means the plugin is disabled in that profile.
 - **Environment:** the app passes `.sandbox` for Xcode builds and `.production` for TestFlight and App Store builds. The kit never guesses.
+- **Routing a tap to its server:** mercury-push stamps each delivery with `device_id` (angel12/mercury-push#3 or later, `dea1936`). `PushPayload.deviceID` → `PushPairing.pairing(forDeviceID:)` gives the `server` (`ServerEndpoint.key`) and `profile`. It is nil for notifications from older plugins.
 
 ## Source provenance
 

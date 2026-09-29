@@ -169,6 +169,7 @@ func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceTo
     _ = result == .unpairedLocallyOnly
     _ = await pairing.isPaired(server: endpoint, profile: nil)
     _ = await pairing.pairings()
+    _ = await pairing.pairing(forDeviceID: "dev_1")?.server
     try await pairing.unpairAll()
     let state: PushPairingState = try store.load()
     _ = (state.installationID, state.pairings.first?.profile)
@@ -184,7 +185,7 @@ func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceTo
         case .sessionKey(let key, let profile): _ = (key, profile)
         case .none: break
         }
-        _ = payload.kind == .approval
+        _ = (payload.kind == .approval, payload.deviceID)
     }
     let errors: [Error] = [
         PushPairingError.noDeviceToken, PushRelayError.rateLimited(retryAfter: 1),
