@@ -72,6 +72,10 @@ struct PushRelayClientTests {
         (422, #"{"error":"invalid_request","message":"x"}"#, [:], .invalidRequest),
         (429, #"{"error":"rate_limited","message":"x"}"#, ["Retry-After": "42"], .rateLimited(retryAfter: 42)),
         (429, #"{"error":"rate_limited","message":"x"}"#, [:], .rateLimited(retryAfter: nil)),
+        (429, "", ["Retry-After": "nan"], .rateLimited(retryAfter: nil)),
+        (429, "", ["Retry-After": "inf"], .rateLimited(retryAfter: nil)),
+        (429, "", ["Retry-After": "-5"], .rateLimited(retryAfter: nil)),
+        (429, "", ["Retry-After": "0"], .rateLimited(retryAfter: 0)),
         (503, #"{"error":"apns_unavailable","message":"x"}"#, [:], .http(status: 503, code: "apns_unavailable")),
         (502, "<html>bad gateway</html>", [:], .http(status: 502, code: nil)),
     ])
@@ -112,5 +116,14 @@ struct PushRelayClientTests {
     @Test func defaultBaseURLIsProductionRelay() {
         #expect(PushRelayClient.defaultBaseURL.absoluteString == "https://mpns.angelsolutionsnm.com")
         #expect(PushRelayClient().baseURL == PushRelayClient.defaultBaseURL)
+    }
+
+    @Test(arguments: ["/mpns", "/mpns/"])
+    func baseURLPathPrefixIsPreserved(prefix: String) async throws {
+        let server = try await RoutedHTTPServer.start { _ in .init(200, #"{"ok":true}"#) }
+        defer { server.stop() }
+        let relay = PushRelayClient(baseURL: URL(string: "http://127.0.0.1:\(server.port)\(prefix)")!)
+        try await relay.update(installationID: "inst_1", secret: "s3cret", deviceToken: nil, environment: nil)
+        #expect(server.requests.map(\.path) == ["/mpns/v1/installations/inst_1"])
     }
 }

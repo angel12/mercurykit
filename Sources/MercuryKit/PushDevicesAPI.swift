@@ -94,7 +94,8 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
     case invalidProfile
     /// 409: the plugin is disabled in this profile, so its hooks would never fire.
     case pluginNotEnabled(profile: String)
-    /// 404 with no plugin error code: the plugin isn't installed, or its routes aren't mounted.
+    /// 404 with no plugin error code, or 405: the plugin isn't installed or its routes aren't mounted
+    /// (Hermes' SPA catch-all answers 405 to POST, PATCH and DELETE on unmounted routes).
     case pluginUnavailable
     /// Hermes rejected the credentials, even after one refresh.
     case unauthorized
@@ -128,7 +129,7 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
         case (503, "relay_url_invalid"): self = .relayURLInvalid
         case (404, "device_not_found"): self = .deviceNotFound
         case (404, "profile_not_found"): self = .profileNotFound
-        case (404, _): self = .pluginUnavailable
+        case (404, _), (405, _): self = .pluginUnavailable
         case (400, "invalid_profile"): self = .invalidProfile
         case (409, "plugin_not_enabled"): self = .pluginNotEnabled(profile: json?["profile"]?.stringValue ?? "")
         default: self = .http(status: status, code: code)

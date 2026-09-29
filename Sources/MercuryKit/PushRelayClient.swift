@@ -62,7 +62,8 @@ public enum PushRelayError: Error, Sendable, Equatable, LocalizedError {
     case bundleNotAllowed
     /// 422: the relay rejected the request body.
     case invalidRequest
-    /// 429: too many requests. Honour `retryAfter` (seconds) when present.
+    /// 429: too many requests. Honour `retryAfter` (seconds) when present; it is always finite and
+    /// non-negative (NaN, infinite and negative header values become nil).
     case rateLimited(retryAfter: TimeInterval?)
     /// Any other non-2xx status, with the relay's `error` code when the body had one.
     case http(status: Int, code: String?)
@@ -162,7 +163,10 @@ public struct PushRelayClient: Sendable {
         _ method: String, _ path: String, secret: String?, body: [String: JSONValue]?
     ) async throws -> JSONValue {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
-        components.percentEncodedPath = path
+        // Keep any path prefix on the base URL (a relay behind a reverse proxy at /mpns).
+        var prefix = components.percentEncodedPath
+        while prefix.hasSuffix("/") { prefix.removeLast() }
+        components.percentEncodedPath = prefix + path
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
         request.timeoutInterval = 30
@@ -189,7 +193,8 @@ public struct PushRelayClient: Sendable {
         case 401:
             throw PushRelayError.credentialInvalid
         case 429:
-            let retryAfter = response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            let retryAfter = response.value(forHTTPHeaderField: "Retry-After")
+                .flatMap(TimeInterval.init).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
             throw PushRelayError.rateLimited(retryAfter: retryAfter)
         case 422:
             throw PushRelayError.invalidRequest

@@ -45,6 +45,14 @@ public enum PushPairingError: Error, Sendable, Equatable, LocalizedError {
 /// Mutating calls (`updateDeviceToken`, `pair`, `syncPairing`, `unpair`, `unpairAll`) are
 /// serialised in FIFO order, so concurrent callers never interleave across network awaits.
 /// `pairings()` and `isPaired` are unsynchronised reads of the current state.
+///
+/// Use one instance per process and Keychain service; separate instances would each cache their
+/// own copy of the state and overwrite one another. Pass profiles consistently: `nil` (the
+/// server's launch profile) and `"default"` are different local records.
+///
+/// The Keychain item is read lazily inside each mutating call, retrying until a read succeeds.
+/// An unreadable item (for example before first unlock) throws `PushPairingError.storageUnavailable`
+/// before any network call; it is never treated as empty.
 public actor PushPairing {
     private let relay: PushRelayClient
     private let store: PushPairingStore
@@ -156,8 +164,10 @@ public actor PushPairing {
         return .notPaired
     }
 
-    /// Unpairs `profile` on `server`. The local record is removed even when Hermes can't be told.
-    /// - Throws: `PushPairingError.storage` only.
+    /// Unpairs `profile` on `server`. The local record is removed even when Hermes can't be told:
+    /// any error other than `deviceNotFound` (including `.unauthorized` and cancellation) yields
+    /// `.unpairedLocallyOnly`.
+    /// - Throws: `PushPairingError.storage` or `.storageUnavailable` only.
     public func unpair(server: HermesRESTClient, profile: String?) async throws -> PushUnpairResult {
         await acquire()
         defer { release() }

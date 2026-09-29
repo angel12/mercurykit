@@ -76,6 +76,7 @@ struct PushDevicesAPITests {
         (404, #"{"error":"device_not_found"}"#, .deviceNotFound),
         (404, #"{"error":"profile_not_found"}"#, .profileNotFound),
         (404, #"{"detail":"Not Found"}"#, .pluginUnavailable),
+        (405, #"{"detail":"Method Not Allowed"}"#, .pluginUnavailable),  // SPA catch-all when the plugin isn't mounted
         (404, "", .pluginUnavailable),
         (400, #"{"error":"invalid_profile"}"#, .invalidProfile),
         (409, #"{"error":"plugin_not_enabled","profile":"off"}"#, .pluginNotEnabled(profile: "off")),
@@ -110,5 +111,44 @@ struct PushDevicesAPITests {
             approval: true, responseReady: true, turnFailed: true, taskDone: true, cron: true))
         let decoded = PushPreferences(json: .object(["cron": .bool(false), "surprise": .bool(false)]))
         #expect(decoded == PushPreferences(cron: false))
+    }
+
+    // MARK: Password-mode refresh
+
+    private func passwordClient(_ server: RoutedHTTPServer) throws -> HermesRESTClient {
+        let endpoint = try ServerEndpoint.parse("http://127.0.0.1:\(server.port)").endpoint
+        let authenticator = HermesAuthenticator(
+            endpoint: endpoint,
+            credentials: .password(PasswordSession(
+                provider: "basic", username: "spencer", accessToken: "old-at", refreshToken: "old-rt", expiresAt: 0)))
+        return HermesRESTClient(endpoint: endpoint, authenticator: authenticator)
+    }
+
+    private static let refreshed = #"{"access_token":"new-at","refresh_token":"new-rt","expires_at":99}"#
+
+    @Test func passwordModeRefreshesOn401AndRetriesWithRotatedToken() async throws {
+        let server = try await RoutedHTTPServer.start { request in
+            if request.path == "/auth/native/refresh" { return .init(200, Self.refreshed) }
+            return request.headers["authorization"] == "Bearer new-at" ? .init(200, "[]") : .init(401, #"{"detail":"expired"}"#)
+        }
+        defer { server.stop() }
+
+        let devices = try await passwordClient(server).pushDevices(profile: "coder")
+
+        #expect(devices.isEmpty)
+        #expect(server.requests.map(\.path) == ["\(Self.base)?profile=coder", "/auth/native/refresh", "\(Self.base)?profile=coder"])
+        #expect(server.requests.map { $0.headers["authorization"] } == ["Bearer old-at", nil, "Bearer new-at"])
+    }
+
+    @Test func passwordModeSecond401AfterRefreshIsUnauthorized() async throws {
+        let server = try await RoutedHTTPServer.start { request in
+            request.path == "/auth/native/refresh" ? .init(200, Self.refreshed) : .init(401, #"{"detail":"no"}"#)
+        }
+        defer { server.stop() }
+        let rest = try passwordClient(server)
+
+        await #expect(throws: PushDevicesError.unauthorized) { _ = try await rest.pushDevices(profile: nil) }
+        #expect(server.requests.map(\.path) == [Self.base, "/auth/native/refresh", Self.base])
+        #expect(server.requests.last?.headers["authorization"] == "Bearer new-at")
     }
 }

@@ -72,9 +72,10 @@ The kit implements the app side of [Mercury Push](https://github.com/angel12/mer
   - A relay `401` re-registers once and clears every pairing record, because they belonged to the dead installation. The app should offer to re-pair.
   - An expired pairing code is retried once with a fresh code.
   - `syncPairing` drops pairings that Hermes no longer lists, or marks inactive.
-  - `unpair` always removes the local record, and reports `.unpairedLocallyOnly` when Hermes couldn't be told.
+  - `unpair` always removes the local record. Any error other than `deviceNotFound` (including `.unauthorized` and cancellation) yields `.unpairedLocallyOnly`.
   - `unpairAll` revokes the relay installation without contacting any Hermes server.
-- **Storage:** everything lives in one Keychain item (account `mercury-push`, service injected by the app), device-only and never synchronised. The kit never uses UserDefaults.
+- **Storage:** everything lives in one Keychain item (account `mercury-push`, service injected by the app), device-only and never synchronised. The kit never uses UserDefaults. `PushPairing` reads the item lazily; if it can't be read (for example before first unlock) calls throw `PushPairingError.storageUnavailable` without touching the network, and retry the read next time. A corrupt item reads as empty and is overwritten.
+- **One instance:** use one `PushPairing` per process and Keychain service. Pass profiles consistently: `nil` and `"default"` are different local records.
 - **Profiles:** the plugin scopes pairing per profile through `?profile=`, which requires angel12/mercury-push#2 or later. `PushDevicesError.pluginNotEnabled` means the plugin is disabled in that profile.
 - **Environment:** the app passes `.sandbox` for Xcode builds and `.production` for TestFlight and App Store builds. The kit never guesses.
 
