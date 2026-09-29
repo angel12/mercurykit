@@ -1,10 +1,10 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`) and `0.4.1` (this branch; tagged after merge). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115 and `0.4.0` in #141, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`) and `0.4.1` (`c49cfc8`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
 ## Upstream parity branch (`fix/upstream-parity-9a0a162536`)
 
-Run on 2026-09-27, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstream hermes-agent audited from `59004a6235` to `origin/main` head `9a0a162536` (1,672 commits, fetched fresh, read through `git show`/`git diff`/`git archive` against the ref, never a checkout). `DESKTOP_BACKEND_CONTRACT` is still 8. The newest release tag, `v2026.9.24` (`f97608f178`), predates the changes below; they ship only in the `v0.21.4+canary.20260926*`/`20260927*` canaries.
+Run on 2026-09-27 on macOS (arm64); the toolchain wasn't recorded then. `swift test` and the API constraints were re-run on 2026-09-29 against the tagged code on macOS 26.7.1, Swift 6.4 / Xcode 27.0 (27A266a). Upstream hermes-agent audited from `59004a6235` to `origin/main` head `9a0a162536` (1,672 commits, fetched fresh, read through `git show`/`git diff`/`git archive` against the ref, never a checkout). `DESKTOP_BACKEND_CONTRACT` is still 8. The newest release tag, `v2026.9.24` (`f97608f178`), predates the changes below; they ship only in the `v0.21.4+canary.20260926*`/`20260927*` canaries.
 
 ### Verified
 
@@ -13,12 +13,15 @@ Run on 2026-09-27, macOS 26.7 (arm64), Swift 6.3.3 / Xcode 26.6 (17F113). Upstre
 - Param-key audit with `tui_gateway.contracts.registry.validate_params`: `session.create` `{cols, source, cwd, cwd_explicit, profile, title}` passes at `9a0a162536` and is refused at `59004a6235` with the message the fallback matches; the same params without `cwd_explicit` pass at both.
 - Docs only: `session.delete` answers 4023 and `DELETE /api/sessions/{id}` answers 409 while a live turn or compression owns the row (hermes-agent `40523600b0`). The kit already surfaces both as errors.
 - `swift test`: **477 tests / 66 suites passed** (473 / 65 on `main`).
-- `python3 scripts/check-api-constraints.py`: passed.
+- `python3 scripts/check-api-constraints.py`: passed on 2026-09-27. On Swift 6.4 the script can't find the module: SwiftPM's new build system puts `MercuryKit.swiftmodule` directly in `--show-bin-path` (`.build/out/Products/Debug`), not in its `Modules/` subfolder. With the path corrected (a scratch copy, not committed), all three checks passed on 2026-09-29. Hosted CI's Swift 6.1 isn't affected.
+- Hosted CI: passed on the pull request (run `36452065056`, `1942b50`) and on `main` after the merge (run `36489713027`, `c49cfc8`).
+- Published: merged as angel12/mercurykit#11 (`c49cfc8`) and tagged `0.4.1` (annotated) after `main` CI passed. A throwaway package pinned `exact: "0.4.1"` resolves to `c49cfc8`.
+- Live check on 2026-09-29, Xcode 27.0 (27A266a), against `hermes serve` at hermes-agent `5eb1381f39` (contract 8; `9a0a162536..5eb1381f39` leaves the `cwd_explicit` handling alone and changes only `session.set_hidden` and `session.undo` among the kit-adjacent contracts, neither of which the kit calls). With a throwaway named profile whose `terminal.cwd` was a scratch folder, a MercuryKit `0.4.1` probe got: `createSession(cwd: project, profile:)` → the project folder; the pre-`0.4.1` wire shape (no `cwd_explicit`) → the profile's folder, reproducing the bug; `createSession(profile:)` with no cwd → the profile's folder. The profile was deleted and its identity purged afterwards.
+- Mercury Chat adopted `0.4.1` in angel12/mercurychat#142 (`beab44e`): ChatCore 178 tests and `MercuryTests` 169 tests passed, `Mercury` built for generic macOS, iOS Simulator and visionOS Simulator against `c49cfc8`, and it launched on the iPhone 17 Pro simulator (iOS 26.5).
 
 ### Not run or pending
 
-- No live backend check, and Mercury Chat hasn't adopted `0.4.1` yet.
-- Hosted CI and the `0.4.1` tag: pending (the tag is cut on the merge commit after `main` CI passes).
+- The Chat app itself wasn't connected to the live server (the session token has to be entered by hand); the live check above drove the kit directly.
 - Not wrapped (optional, no compatibility impact): `session.archive` (the kit archives through `PATCH /api/sessions/{id}`), `session.resume`/`GET /api/sessions/{id}/messages` `inline_images=false`, `projects.changed`, and the sidebar route's new `failed`/`profiles_failed` slices (the kit reads `/api/profiles/sessions`, not `/sidebar`).
 
 ## Upstream parity branch (`fix/upstream-parity-59004a6235`)
