@@ -296,6 +296,30 @@ public struct HermesRESTClient: Sendable {
         }
     }
 
+    /// Like `performAuthenticated`, but returns the status and parsed JSON for EVERY status,
+    /// so callers can map their own error bodies (Mercury Push plugin routes use
+    /// `{"error": code}`). A 401 still refreshes once; a second 401 throws `.unauthorized`.
+    func performAuthenticatedRaw(_ request: URLRequest) async throws -> (status: Int, json: JSONValue?) {
+        func attempt(_ base: URLRequest) async throws -> (HTTPURLResponse, Data, [String: String]) {
+            var authed = base
+            let headers = await authenticator.authHeaders()
+            for (key, value) in headers { authed.setValue(value, forHTTPHeaderField: key) }
+            let (response, data) = try await HermesHTTP.load(authed, on: urlSession)
+            return (response, data, headers)
+        }
+        var (response, data, headers) = try await attempt(request)
+        if response.statusCode == 401 {
+            let sentToken = headers["Authorization"].map { String($0.dropFirst("Bearer ".count)) }
+            guard try await authenticator.recoverFromUnauthorized(sentAccessToken: sentToken) else {
+                throw HermesError.unauthorized
+            }
+            (response, data, headers) = try await attempt(request)
+            if response.statusCode == 401 { throw HermesError.unauthorized }
+        }
+        let json = data.isEmpty ? nil : try? JSONDecoder().decode(JSONValue.self, from: data)
+        return (response.statusCode, json)
+    }
+
     private func perform(_ request: URLRequest) async throws -> JSONValue {
         try await HermesHTTP.performJSON(request, on: urlSession)
     }
