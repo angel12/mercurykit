@@ -168,4 +168,60 @@ struct PushDevicesAPITests {
         #expect(server.requests.map(\.path) == [Self.base, "/auth/native/refresh", Self.base])
         #expect(server.requests.last?.headers["authorization"] == "Bearer new-at")
     }
+
+    @Test func updateSessionScopeSendsOnlyTheScope() async throws {
+        let owned = Self.device.replacingOccurrences(of: #""active":true"#, with: #""active":true,"session_scope":"owned""#)
+        let server = try await RoutedHTTPServer.start { _ in .init(200, owned) }
+        defer { server.stop() }
+        let device = try await client(server).updatePushSessionScope(profile: "coder", deviceID: "dev_1", .owned)
+        #expect(device.sessionScope == .owned)
+        let request = try #require(server.requests.first)
+        #expect(request.method == "PATCH")
+        #expect(request.path == "\(Self.base)/dev_1?profile=coder")
+        #expect(try JSONDecoder().decode(JSONValue.self, from: request.body) == .object(["session_scope": .string("owned")]))
+    }
+
+    @Test(arguments: [
+        (422, #"{"detail":[{"type":"missing","loc":["body","preferences"]}]}"#),  // older DevicePatch requires preferences
+        (200, PushDevicesAPITests.device),  // older plugin ignored the field
+    ])
+    func updateSessionScopeOnOlderPluginIsUnsupported(status: Int, body: String) async throws {
+        let server = try await RoutedHTTPServer.start { _ in .init(status, body) }
+        defer { server.stop() }
+        let rest = try client(server)
+        await #expect(throws: PushDevicesError.featureUnsupported) {
+            _ = try await rest.updatePushSessionScope(profile: nil, deviceID: "dev_1", .owned)
+        }
+    }
+
+    @Test func claimSessionPutsPercentEncodedPath() async throws {
+        let server = try await RoutedHTTPServer.start { _ in .init(204, "") }
+        defer { server.stop() }
+        try await client(server).claimPushSession(profile: "coder", deviceID: "dev_1", sessionID: "20261007_a/b c")
+        let request = try #require(server.requests.first)
+        #expect(request.method == "PUT")
+        #expect(request.path == "\(Self.base)/dev_1/sessions/20261007_a%2Fb%20c?profile=coder")
+        #expect(request.body.isEmpty)
+    }
+
+    @Test func claimSessionMapsDeviceNotFound() async throws {
+        let server = try await RoutedHTTPServer.start { _ in .init(404, #"{"error":"device_not_found"}"#) }
+        defer { server.stop() }
+        let rest = try client(server)
+        await #expect(throws: PushDevicesError.deviceNotFound) {
+            try await rest.claimPushSession(profile: nil, deviceID: "dev_1", sessionID: "s1")
+        }
+    }
+
+    @Test func pairSendsSessionScopeOnlyWhenGiven() async throws {
+        let server = try await RoutedHTTPServer.start { _ in .init(201, #"{"device_id":"dev_1","profile":"default"}"#) }
+        defer { server.stop() }
+        let rest = try client(server)
+        _ = try await rest.pairPushDevice(
+            profile: nil, installationID: "i", pairingCode: "c", deviceName: "n", preferences: nil, sessionScope: .owned)
+        _ = try await rest.pairPushDevice(
+            profile: nil, installationID: "i", pairingCode: "c", deviceName: "n", preferences: nil)
+        let bodies = try server.requests.map { try JSONDecoder().decode(JSONValue.self, from: $0.body) }
+        #expect(bodies.map { $0["session_scope"] } == [.string("owned"), nil])
+    }
 }

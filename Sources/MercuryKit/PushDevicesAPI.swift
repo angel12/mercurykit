@@ -160,16 +160,18 @@ extension HermesRESTClient {
     static let maxDeviceNameScalars = 64
 
     /// `POST …/devices?profile=`: pair this relay installation with `profile`. `deviceName` is
-    /// clamped to its first 64 Unicode scalars. Throws `PushDevicesError`.
+    /// clamped to its first 64 Unicode scalars. `sessionScope` is sent only when non-nil.
+    /// Throws `PushDevicesError`.
     public func pairPushDevice(
         profile: String?, installationID: String, pairingCode: String, deviceName: String,
-        preferences: PushPreferences?
+        preferences: PushPreferences?, sessionScope: PushSessionScope? = nil
     ) async throws -> PushDevicePairing {
         var body: [String: JSONValue] = [
             "installation_id": .string(installationID), "pairing_code": .string(pairingCode),
             "device_name": .string(String(deviceName.unicodeScalars.prefix(Self.maxDeviceNameScalars))),
         ]
         if let preferences { body["preferences"] = preferences.json }
+        if let sessionScope { body["session_scope"] = .string(sessionScope.rawValue) }
         let json = try await pushRequest("POST", Self.pushDevicesPath, profile: profile, body: .object(body))
         guard let id = json["device_id"]?.stringValue, let paired = json["profile"]?.stringValue else {
             throw PushDevicesError.malformedResponse
@@ -194,6 +196,32 @@ extension HermesRESTClient {
         return device
     }
 
+    /// `PATCH …/devices/:id?profile=` with only `session_scope`. Throws `PushDevicesError`;
+    /// `.featureUnsupported` when the plugin predates session scopes.
+    public func updatePushSessionScope(
+        profile: String?, deviceID: String, _ scope: PushSessionScope
+    ) async throws -> PushDevice {
+        let json: JSONValue
+        do {
+            json = try await pushRequest(
+                "PATCH", Self.pushDevicePath(deviceID), profile: profile,
+                body: .object(["session_scope": .string(scope.rawValue)]))
+        } catch PushDevicesError.http(status: 422, code: _) {
+            throw PushDevicesError.featureUnsupported  // older plugins require `preferences` in a PATCH
+        }
+        guard let device = PushDevice(json: json) else { throw PushDevicesError.malformedResponse }
+        guard device.sessionScope != nil else { throw PushDevicesError.featureUnsupported }
+        return device
+    }
+
+    /// `PUT …/devices/:id/sessions/:session_id?profile=`: makes this device the session's owner
+    /// (last claim wins). Older plugins answer `.pluginUnavailable`. Throws `PushDevicesError`.
+    public func claimPushSession(profile: String?, deviceID: String, sessionID: String) async throws {
+        _ = try await pushRequest(
+            "PUT", Self.pushDevicePath(deviceID) + "/sessions/" + Self.pathSegment(sessionID), profile: profile,
+            body: nil)
+    }
+
     /// `POST …/devices/:id/test?profile=`: returns the queued event id. Throws `PushDevicesError`.
     public func sendTestPush(profile: String?, deviceID: String) async throws -> String {
         let json = try await pushRequest("POST", Self.pushDevicePath(deviceID) + "/test", profile: profile, body: nil)
@@ -208,9 +236,13 @@ extension HermesRESTClient {
     }
 
     private static func pushDevicePath(_ deviceID: String) -> String {
+        pushDevicesPath + "/" + pathSegment(deviceID)
+    }
+
+    private static func pathSegment(_ raw: String) -> String {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove("/")
-        return pushDevicesPath + "/" + (deviceID.addingPercentEncoding(withAllowedCharacters: allowed) ?? deviceID)
+        return raw.addingPercentEncoding(withAllowedCharacters: allowed) ?? raw
     }
 
     private func pushRequest(
