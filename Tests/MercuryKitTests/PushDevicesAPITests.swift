@@ -113,6 +113,23 @@ struct PushDevicesAPITests {
         #expect(decoded == PushPreferences(cron: false))
     }
 
+    @Test(arguments: [
+        (#""session_scope":"owned","#, PushSessionScope?.some(.owned)),
+        (#""session_scope":"all","#, PushSessionScope?.some(.all)),
+        (#""session_scope":"mine","#, nil),
+        ("", nil),
+    ])
+    func decodesSessionScope(field: String, expected: PushSessionScope?) throws {
+        let text = #"{"device_id":"dev_1","device_name":"iPhone",\#(field)"preferences":{},"active":true}"#
+        let device = try #require(PushDevice(json: try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))))
+        #expect(device.sessionScope == expected)
+    }
+
+    @Test func featureUnsupportedDescription() {
+        #expect(PushDevicesError.featureUnsupported.errorDescription
+            == "Mercury Push on this server doesn't support this yet.")
+    }
+
     // MARK: Password-mode refresh
 
     private func passwordClient(_ server: RoutedHTTPServer) throws -> HermesRESTClient {

@@ -35,6 +35,14 @@ public struct PushPreferences: Sendable, Equatable, Codable {
     }
 }
 
+/// Which sessions in its profile notify a paired device.
+public enum PushSessionScope: String, Sendable, Equatable, Codable {
+    /// Every session in the profile (the default).
+    case all
+    /// Only sessions this device claimed last (`claimPushSession`), plus sessionless broadcasts and tests.
+    case owned
+}
+
 /// A device paired with one Hermes profile, as the plugin reports it (credentials never leave Hermes).
 public struct PushDevice: Sendable, Equatable {
     public let deviceID: String
@@ -45,10 +53,13 @@ public struct PushDevice: Sendable, Equatable {
     public let lastError: String?
     /// False once the relay has unpaired the device (for example, the app was deleted).
     public let active: Bool
+    /// Nil when the plugin predates session scopes (hide the setting) or sends an unknown value.
+    public let sessionScope: PushSessionScope?
 
     public init(
         deviceID: String, deviceName: String, preferences: PushPreferences, pairedAt: Date?,
-        lastDeliveryAt: Date?, lastError: String?, active: Bool
+        lastDeliveryAt: Date?, lastError: String?, active: Bool,
+        sessionScope: PushSessionScope? = nil
     ) {
         self.deviceID = deviceID
         self.deviceName = deviceName
@@ -57,6 +68,7 @@ public struct PushDevice: Sendable, Equatable {
         self.lastDeliveryAt = lastDeliveryAt
         self.lastError = lastError
         self.active = active
+        self.sessionScope = sessionScope
     }
 
     init?(json: JSONValue) {
@@ -65,7 +77,8 @@ public struct PushDevice: Sendable, Equatable {
             deviceID: id, deviceName: name, preferences: PushPreferences(json: json["preferences"]),
             pairedAt: json["paired_at"]?.stringValue.flatMap(PushDate.parse),
             lastDeliveryAt: json["last_delivery_at"]?.stringValue.flatMap(PushDate.parse),
-            lastError: json["last_error"]?.stringValue, active: json["active"]?.boolValue ?? true)
+            lastError: json["last_error"]?.stringValue, active: json["active"]?.boolValue ?? true,
+            sessionScope: json["session_scope"]?.stringValue.flatMap(PushSessionScope.init(rawValue:)))
     }
 }
 
@@ -97,6 +110,8 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
     /// 404 with no plugin error code, or 405: the plugin isn't installed or its routes aren't mounted
     /// (Hermes' SPA catch-all answers 405 to POST, PATCH and DELETE on unmounted routes).
     case pluginUnavailable
+    /// The plugin predates this feature (for example session scopes); update mercury-push on the server.
+    case featureUnsupported
     /// Hermes rejected the credentials, even after one refresh.
     case unauthorized
     /// Any other non-2xx status, with the `error` code when the body had one.
@@ -115,6 +130,7 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
         case .invalidProfile: return "That isn't a valid Hermes profile name."
         case .pluginNotEnabled(let profile): return "Mercury Push isn't enabled for profile \(profile)."
         case .pluginUnavailable: return "Mercury Push isn't installed on this server."
+        case .featureUnsupported: return "Mercury Push on this server doesn't support this yet."
         case .unauthorized: return "Hermes didn't accept the saved sign-in."
         case .http(let status, let code): return "Hermes returned HTTP \(status)\(code.map { " (\($0))" } ?? "")."
         case .transport(let detail): return "Couldn't reach Hermes (\(detail))."
