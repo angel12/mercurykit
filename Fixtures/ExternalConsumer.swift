@@ -161,8 +161,10 @@ func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceTo
     let record: PushPairingRecord = try await pairing.pair(
         server: rest, profile: "coder", deviceName: "iPhone", preferences: PushPreferences(cron: false))
     _ = record.deviceID
+    _ = try await pairing.pair(server: rest, profile: "coder", deviceName: "iPhone", sessionScope: .owned)
+    try await pairing.claimSession(server: rest, profile: "coder", sessionID: "s1")
     switch try await pairing.syncPairing(server: rest, profile: "coder") {
-    case .paired(let device): _ = (device.active, device.preferences.approval, device.lastDeliveryAt)
+    case .paired(let device): _ = (device.active, device.preferences.approval, device.lastDeliveryAt, device.sessionScope)
     case .notPaired: break
     }
     let result: PushUnpairResult = try await pairing.unpair(server: rest, profile: "coder")
@@ -177,6 +179,11 @@ func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceTo
     _ = try await rest.pushDevices(profile: nil)
     _ = try await rest.sendTestPush(profile: nil, deviceID: "dev_1")
     _ = try await rest.updatePushPreferences(profile: nil, deviceID: "dev_1", PushPreferences())
+    let scoped: PushDevice = try await rest.updatePushSessionScope(profile: nil, deviceID: "dev_1", .owned)
+    _ = scoped.sessionScope == PushSessionScope.all
+    try await rest.claimPushSession(profile: nil, deviceID: "dev_1", sessionID: "s1")
+    _ = try await rest.pairPushDevice(
+        profile: nil, installationID: "i", pairingCode: "c", deviceName: "n", preferences: nil, sessionScope: .all)
     try await rest.unpairPushDevice(profile: nil, deviceID: "dev_1")
 
     if let payload = PushPayload(userInfo: [:]) {
@@ -189,7 +196,8 @@ func adoptMercuryPush(endpoint: ServerEndpoint, rest: HermesRESTClient, deviceTo
     }
     let errors: [Error] = [
         PushPairingError.noDeviceToken, PushRelayError.rateLimited(retryAfter: 1),
-        PushDevicesError.pluginNotEnabled(profile: "coder"), PushPairingError.storageUnavailable(0),
+        PushDevicesError.pluginNotEnabled(profile: "coder"), PushDevicesError.featureUnsupported,
+        PushPairingError.storageUnavailable(0),
         PushPairingStoreError.readFailed(0),
     ]
     _ = errors.map(\.localizedDescription)
