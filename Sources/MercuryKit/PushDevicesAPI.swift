@@ -108,7 +108,7 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
     /// 409: the plugin is disabled in this profile, so its hooks would never fire.
     case pluginNotEnabled(profile: String)
     /// 404 with no plugin error code, or 405: the plugin isn't installed or its routes aren't mounted
-    /// (Hermes' SPA catch-all answers 405 to POST, PATCH and DELETE on unmounted routes).
+    /// (Hermes' SPA catch-all answers 405 to POST, PUT, PATCH and DELETE on unmounted routes).
     case pluginUnavailable
     /// The plugin predates this feature (for example session scopes); update mercury-push on the server.
     case featureUnsupported

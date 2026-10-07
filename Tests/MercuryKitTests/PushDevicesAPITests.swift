@@ -213,6 +213,19 @@ struct PushDevicesAPITests {
         }
     }
 
+    @Test(arguments: [
+        (405, #"{"detail":"Method Not Allowed"}"#),  // SPA catch-all when the route isn't mounted
+        (404, #"{"detail":"Not Found"}"#),
+    ])
+    func claimSessionMapsUnmountedRouteToPluginUnavailable(status: Int, body: String) async throws {
+        let server = try await RoutedHTTPServer.start { _ in .init(status, body) }
+        defer { server.stop() }
+        let rest = try client(server)
+        await #expect(throws: PushDevicesError.pluginUnavailable) {
+            try await rest.claimPushSession(profile: nil, deviceID: "dev_1", sessionID: "s1")
+        }
+    }
+
     @Test func pairSendsSessionScopeOnlyWhenGiven() async throws {
         let server = try await RoutedHTTPServer.start { _ in .init(201, #"{"device_id":"dev_1","profile":"default"}"#) }
         defer { server.stop() }

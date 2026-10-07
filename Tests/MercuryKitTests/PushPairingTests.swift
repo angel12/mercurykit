@@ -302,7 +302,7 @@ struct PushPairingTests {
         #expect((try h.store.load()).pairings.isEmpty)
     }
 
-    // MARK: Unreadable Keychain
+    // MARK: Session claims
 
     @Test func claimSessionUsesStoredDeviceID() async throws {
         let h = try await Self.harness(); defer { h.server.stop() }
@@ -354,6 +354,8 @@ struct PushPairingTests {
         _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
         #expect(h.backend.lastSessionScope == nil)
     }
+
+    // MARK: Unreadable Keychain
 
     @Test func unreadableKeychainNeverRegistersOrOverwrites() async throws {
         let h = try await Self.harness(); defer { h.server.stop() }
