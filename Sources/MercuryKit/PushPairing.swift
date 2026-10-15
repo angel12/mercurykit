@@ -44,7 +44,7 @@ public enum PushPairingError: Error, Sendable, Equatable, LocalizedError {
 ///
 /// Mutating calls (`updateDeviceToken`, `pair`, `syncPairing`, `unpair`, `unpairAll`) are
 /// serialised in FIFO order, so concurrent callers never interleave across network awaits.
-/// `pairings()` and `isPaired` are unsynchronised reads of the current state.
+/// `pairings()`, `isPaired` and `claimSession` are not serialised.
 ///
 /// Use one instance per process and Keychain service; separate instances would each cache their
 /// own copy of the state and overwrite one another. Pass profiles consistently: `nil` (the
@@ -114,7 +114,8 @@ public actor PushPairing {
     /// replacing any earlier pairing for the same server and profile.
     /// - Throws: `PushPairingError`.
     public func pair(
-        server: HermesRESTClient, profile: String?, deviceName: String, preferences: PushPreferences? = nil
+        server: HermesRESTClient, profile: String?, deviceName: String, preferences: PushPreferences? = nil,
+        sessionScope: PushSessionScope? = nil
     ) async throws -> PushPairingRecord {
         await acquire()
         defer { release() }
@@ -124,11 +125,13 @@ public actor PushPairing {
         var code = try await freshCode(token: token)
         let pairing: PushDevicePairing
         do {
-            pairing = try await claim(server: server, profile: profile, code: code, deviceName: deviceName, preferences: preferences)
+            pairing = try await claim(server: server, profile: profile, code: code, deviceName: deviceName, preferences: preferences,
+                sessionScope: sessionScope)
         } catch PushDevicesError.relayError(code: "pairing_code_invalid") {
             code = try await freshCode(token: token)
             do {
-                pairing = try await claim(server: server, profile: profile, code: code, deviceName: deviceName, preferences: preferences)
+                pairing = try await claim(server: server, profile: profile, code: code, deviceName: deviceName, preferences: preferences,
+                    sessionScope: sessionScope)
             } catch let error as PushDevicesError {
                 throw PushPairingError.devices(error)
             }
@@ -162,6 +165,21 @@ public actor PushPairing {
         }
         try remove(record)
         return .notPaired
+    }
+
+    /// Tells Hermes this device is now the one using `sessionID`, so it owns the session's pushes
+    /// (last claim wins, whatever this device's own scope). No request when `profile` on `server`
+    /// isn't paired. Not serialised with the mutating calls: it changes no local state. Claims are
+    /// best effort; apps should log failures, not show them.
+    /// - Throws: `PushPairingError.devices` or `.storageUnavailable`.
+    public func claimSession(server: HermesRESTClient, profile: String?, sessionID: String) async throws {
+        try ensureLoaded()
+        guard let record = record(server: server.endpoint.key, profile: profile) else { return }
+        do {
+            try await server.claimPushSession(profile: profile, deviceID: record.deviceID, sessionID: sessionID)
+        } catch let error as PushDevicesError {
+            throw PushPairingError.devices(error)
+        }
     }
 
     /// Unpairs `profile` on `server`. The local record is removed even when Hermes can't be told:
@@ -291,12 +309,12 @@ public actor PushPairing {
 
     private func claim(
         server: HermesRESTClient, profile: String?, code: PushPairingCode, deviceName: String,
-        preferences: PushPreferences?
+        preferences: PushPreferences?, sessionScope: PushSessionScope?
     ) async throws -> PushDevicePairing {
         guard let id = state.installationID else { throw PushPairingError.relay(.credentialInvalid) }
         return try await server.pairPushDevice(
             profile: profile, installationID: id, pairingCode: code.code, deviceName: deviceName,
-            preferences: preferences)
+            preferences: preferences, sessionScope: sessionScope)
     }
 
     private func persist() throws {

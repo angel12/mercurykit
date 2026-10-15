@@ -35,6 +35,14 @@ public struct PushPreferences: Sendable, Equatable, Codable {
     }
 }
 
+/// Which sessions in its profile notify a paired device.
+public enum PushSessionScope: String, Sendable, Equatable, Codable {
+    /// Every session in the profile (the default).
+    case all
+    /// Only sessions this device claimed last (`claimPushSession`), plus sessionless broadcasts and tests.
+    case owned
+}
+
 /// A device paired with one Hermes profile, as the plugin reports it (credentials never leave Hermes).
 public struct PushDevice: Sendable, Equatable {
     public let deviceID: String
@@ -45,10 +53,13 @@ public struct PushDevice: Sendable, Equatable {
     public let lastError: String?
     /// False once the relay has unpaired the device (for example, the app was deleted).
     public let active: Bool
+    /// Nil when the plugin predates session scopes (hide the setting) or sends an unknown value.
+    public let sessionScope: PushSessionScope?
 
     public init(
         deviceID: String, deviceName: String, preferences: PushPreferences, pairedAt: Date?,
-        lastDeliveryAt: Date?, lastError: String?, active: Bool
+        lastDeliveryAt: Date?, lastError: String?, active: Bool,
+        sessionScope: PushSessionScope? = nil
     ) {
         self.deviceID = deviceID
         self.deviceName = deviceName
@@ -57,6 +68,7 @@ public struct PushDevice: Sendable, Equatable {
         self.lastDeliveryAt = lastDeliveryAt
         self.lastError = lastError
         self.active = active
+        self.sessionScope = sessionScope
     }
 
     init?(json: JSONValue) {
@@ -65,7 +77,8 @@ public struct PushDevice: Sendable, Equatable {
             deviceID: id, deviceName: name, preferences: PushPreferences(json: json["preferences"]),
             pairedAt: json["paired_at"]?.stringValue.flatMap(PushDate.parse),
             lastDeliveryAt: json["last_delivery_at"]?.stringValue.flatMap(PushDate.parse),
-            lastError: json["last_error"]?.stringValue, active: json["active"]?.boolValue ?? true)
+            lastError: json["last_error"]?.stringValue, active: json["active"]?.boolValue ?? true,
+            sessionScope: json["session_scope"]?.stringValue.flatMap(PushSessionScope.init(rawValue:)))
     }
 }
 
@@ -95,8 +108,10 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
     /// 409: the plugin is disabled in this profile, so its hooks would never fire.
     case pluginNotEnabled(profile: String)
     /// 404 with no plugin error code, or 405: the plugin isn't installed or its routes aren't mounted
-    /// (Hermes' SPA catch-all answers 405 to POST, PATCH and DELETE on unmounted routes).
+    /// (Hermes' SPA catch-all answers 405 to POST, PUT, PATCH and DELETE on unmounted routes).
     case pluginUnavailable
+    /// The plugin predates this feature (for example session scopes); update mercury-push on the server.
+    case featureUnsupported
     /// Hermes rejected the credentials, even after one refresh.
     case unauthorized
     /// Any other non-2xx status, with the `error` code when the body had one.
@@ -115,6 +130,7 @@ public enum PushDevicesError: Error, Sendable, Equatable, LocalizedError {
         case .invalidProfile: return "That isn't a valid Hermes profile name."
         case .pluginNotEnabled(let profile): return "Mercury Push isn't enabled for profile \(profile)."
         case .pluginUnavailable: return "Mercury Push isn't installed on this server."
+        case .featureUnsupported: return "Mercury Push on this server doesn't support this yet."
         case .unauthorized: return "Hermes didn't accept the saved sign-in."
         case .http(let status, let code): return "Hermes returned HTTP \(status)\(code.map { " (\($0))" } ?? "")."
         case .transport(let detail): return "Couldn't reach Hermes (\(detail))."
@@ -144,16 +160,18 @@ extension HermesRESTClient {
     static let maxDeviceNameScalars = 64
 
     /// `POST …/devices?profile=`: pair this relay installation with `profile`. `deviceName` is
-    /// clamped to its first 64 Unicode scalars. Throws `PushDevicesError`.
+    /// clamped to its first 64 Unicode scalars. `sessionScope` is sent only when non-nil.
+    /// Throws `PushDevicesError`.
     public func pairPushDevice(
         profile: String?, installationID: String, pairingCode: String, deviceName: String,
-        preferences: PushPreferences?
+        preferences: PushPreferences?, sessionScope: PushSessionScope? = nil
     ) async throws -> PushDevicePairing {
         var body: [String: JSONValue] = [
             "installation_id": .string(installationID), "pairing_code": .string(pairingCode),
             "device_name": .string(String(deviceName.unicodeScalars.prefix(Self.maxDeviceNameScalars))),
         ]
         if let preferences { body["preferences"] = preferences.json }
+        if let sessionScope { body["session_scope"] = .string(sessionScope.rawValue) }
         let json = try await pushRequest("POST", Self.pushDevicesPath, profile: profile, body: .object(body))
         guard let id = json["device_id"]?.stringValue, let paired = json["profile"]?.stringValue else {
             throw PushDevicesError.malformedResponse
@@ -178,6 +196,32 @@ extension HermesRESTClient {
         return device
     }
 
+    /// `PATCH …/devices/:id?profile=` with only `session_scope`. Throws `PushDevicesError`;
+    /// `.featureUnsupported` when the plugin predates session scopes.
+    public func updatePushSessionScope(
+        profile: String?, deviceID: String, _ scope: PushSessionScope
+    ) async throws -> PushDevice {
+        let json: JSONValue
+        do {
+            json = try await pushRequest(
+                "PATCH", Self.pushDevicePath(deviceID), profile: profile,
+                body: .object(["session_scope": .string(scope.rawValue)]))
+        } catch PushDevicesError.http(status: 422, code: _) {
+            throw PushDevicesError.featureUnsupported  // older plugins require `preferences` in a PATCH
+        }
+        guard let device = PushDevice(json: json) else { throw PushDevicesError.malformedResponse }
+        guard device.sessionScope != nil else { throw PushDevicesError.featureUnsupported }
+        return device
+    }
+
+    /// `PUT …/devices/:id/sessions/:session_id?profile=`: makes this device the session's owner
+    /// (last claim wins). Older plugins answer `.pluginUnavailable`. Throws `PushDevicesError`.
+    public func claimPushSession(profile: String?, deviceID: String, sessionID: String) async throws {
+        _ = try await pushRequest(
+            "PUT", Self.pushDevicePath(deviceID) + "/sessions/" + Self.pathSegment(sessionID), profile: profile,
+            body: nil)
+    }
+
     /// `POST …/devices/:id/test?profile=`: returns the queued event id. Throws `PushDevicesError`.
     public func sendTestPush(profile: String?, deviceID: String) async throws -> String {
         let json = try await pushRequest("POST", Self.pushDevicePath(deviceID) + "/test", profile: profile, body: nil)
@@ -192,9 +236,13 @@ extension HermesRESTClient {
     }
 
     private static func pushDevicePath(_ deviceID: String) -> String {
+        pushDevicesPath + "/" + pathSegment(deviceID)
+    }
+
+    private static func pathSegment(_ raw: String) -> String {
         var allowed = CharacterSet.urlPathAllowed
         allowed.remove("/")
-        return pushDevicesPath + "/" + (deviceID.addingPercentEncoding(withAllowedCharacters: allowed) ?? deviceID)
+        return raw.addingPercentEncoding(withAllowedCharacters: allowed) ?? raw
     }
 
     private func pushRequest(

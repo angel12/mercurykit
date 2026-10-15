@@ -302,6 +302,59 @@ struct PushPairingTests {
         #expect((try h.store.load()).pairings.isEmpty)
     }
 
+    // MARK: Session claims
+
+    @Test func claimSessionUsesStoredDeviceID() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        let record = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        try await pairing.claimSession(server: h.hermes, profile: "coder", sessionID: "s1")
+        #expect(h.backend.claims == ["s1": record.deviceID])
+        #expect(h.backend.log.last == "PUT /api/plugins/mercury_push/devices/\(record.deviceID)/sessions/s1?profile=coder")
+    }
+
+    @Test func claimSessionWhenUnpairedSendsNothing() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        let before = h.backend.log.count
+        try await pairing.claimSession(server: h.hermes, profile: "other", sessionID: "s1")
+        #expect(h.backend.log.count == before)
+        #expect(h.backend.claims.isEmpty)
+    }
+
+    @Test func claimSessionWrapsPluginErrors() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        let record = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        h.backend.removeDevice(record.deviceID)
+        await #expect(throws: PushPairingError.devices(.deviceNotFound)) {
+            try await pairing.claimSession(server: h.hermes, profile: "coder", sessionID: "s1")
+        }
+    }
+
+    @Test func claimSessionWhileKeychainUnreadableThrows() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        h.keychain.failReads = errSecInteractionNotAllowed
+        await #expect(throws: PushPairingError.storageUnavailable(errSecInteractionNotAllowed)) {
+            try await h.coordinator().claimSession(server: h.hermes, profile: "coder", sessionID: "s1")
+        }
+        #expect(h.backend.log.isEmpty)
+    }
+
+    @Test func pairPassesSessionScope() async throws {
+        let h = try await Self.harness(); defer { h.server.stop() }
+        let pairing = h.coordinator()
+        try await pairing.updateDeviceToken(Self.tokenA)
+        _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone", sessionScope: .owned)
+        #expect(h.backend.lastSessionScope == "owned")
+        _ = try await pairing.pair(server: h.hermes, profile: "coder", deviceName: "iPhone")
+        #expect(h.backend.lastSessionScope == nil)
+    }
+
     // MARK: Unreadable Keychain
 
     @Test func unreadableKeychainNeverRegistersOrOverwrites() async throws {

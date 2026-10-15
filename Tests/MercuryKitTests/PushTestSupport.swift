@@ -100,6 +100,12 @@ final class FakePushBackend: @unchecked Sendable {
     /// The `device_name` of the most recent pairing claim.
     private var _lastDeviceName: String?
     var lastDeviceName: String? { lock.withLock { _lastDeviceName } }
+    /// The `session_scope` of the most recent pairing claim (nil when absent).
+    private var _lastSessionScope: String?
+    var lastSessionScope: String? { lock.withLock { _lastSessionScope } }
+    /// Claimed sessions: session id → device id.
+    private var _claims: [String: String] = [:]
+    var claims: [String: String] { lock.withLock { _claims } }
 
     private var _log: [String] = []
     /// "METHOD path?query" in arrival order.
@@ -179,6 +185,7 @@ final class FakePushBackend: @unchecked Sendable {
         if method == "POST", path == base {
             let code = body["pairing_code"]?.stringValue ?? ""
             _lastDeviceName = body["device_name"]?.stringValue
+            _lastSessionScope = body["session_scope"]?.stringValue
             if expireNextCodeOnClaim { expireNextCodeOnClaim = false; codes[code] = nil }
             guard let installation = codes.removeValue(forKey: code), installations[installation] != nil else {
                 return .init(502, #"{"error":"relay_error","relay_error":"pairing_code_invalid"}"#)
@@ -193,6 +200,14 @@ final class FakePushBackend: @unchecked Sendable {
                 #"{"device_id":"\#($0.id)","device_name":"iPhone","preferences":{},"paired_at":null,"last_delivery_at":null,"last_error":null,"active":\#($0.active)}"#
             }
             return .init(200, "[\(items.joined(separator: ","))]")
+        }
+        if method == "PUT", path.hasPrefix(base + "/"), path.contains("/sessions/") {
+            let parts = String(path.dropFirst(base.count + 1)).components(separatedBy: "/sessions/")
+            guard parts.count == 2, let device = devices[parts[0]], device.profile == profile, device.active else {
+                return .init(404, #"{"error":"device_not_found"}"#)
+            }
+            _claims[parts[1]] = parts[0]
+            return .init(204, "")
         }
         if method == "DELETE", path.hasPrefix(base + "/") {
             let id = String(path.dropFirst(base.count + 1))
