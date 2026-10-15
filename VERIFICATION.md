@@ -1,6 +1,35 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`) and `0.5.1` (`5e81deb`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`) and `0.6.0` (`01b2906`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+
+## Push session scope (`feat/push-session-scope`, `0.6.0`)
+
+Run on 2026-10-14 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a). This release wraps the plugin's per-device session scope (angel12/mercury-push#11, `b167d79`, released as mercury-push `v0.2.0`, `5a8d626`):
+- `PushSessionScope` (`.all`, `.owned`) and `PushDevice.sessionScope`, which is nil when the plugin predates scopes or sends an unknown value.
+- `HermesRESTClient.updatePushSessionScope` (PATCH with only `session_scope`), `claimPushSession` (`PUT …/devices/:id/sessions/:session_id`, both segments percent-encoded) and an optional `sessionScope:` on `pairPushDevice`.
+- `PushPairing.pair(…, sessionScope:)` and `PushPairing.claimSession(server:profile:sessionID:)`. `claimSession` uses the stored pairing's device id, sends nothing when the server and profile aren't paired, and is not serialised with the mutating calls, because it changes no local state.
+- Against an older plugin, `updatePushSessionScope` throws the new `PushDevicesError.featureUnsupported` (old `DevicePatch` answers 422, or the response has no `session_scope`), and `claimPushSession` throws `.pluginUnavailable`.
+
+Every new parameter is defaulted. The new error case breaks exhaustive `switch`es over `PushDevicesError`, hence the minor bump.
+
+### Verified
+
+- `swift test`: **551 tests / 71 suites passed** (538 before the branch), with no warnings. The new tests cover:
+  - decoding `session_scope` when present, absent or unknown;
+  - the request method, path, query and body for the scope PATCH, the claim PUT (including percent-encoding) and pairing with and without a scope;
+  - `featureUnsupported` for an older plugin's 422 and for a response without the field, and `.pluginUnavailable` for an unmounted claim route (404 or 405);
+  - `claimSession` using the stored device id, sending nothing when unpaired, wrapping plugin errors, and throwing `storageUnavailable` before any request while the Keychain is unreadable;
+  - `pair` forwarding the scope.
+- `python3 scripts/check-api-constraints.py`: all three checks passed. `Fixtures/ExternalConsumer.swift` uses every new public symbol.
+- `actionlint .github/workflows/*.yml`: clean.
+- Hosted CI passed on the pull request (run `37659270742`, `b8c5f49`) and on `main` after the merge (run `38677130610`, `01b2906`).
+- Published: merged as angel12/mercurykit#18 (`01b2906`) and tagged `0.6.0` (annotated) after `main` CI passed. A throwaway package pinned `exact: "0.6.0"` resolves to `01b2906`, builds, and calls `updatePushSessionScope`, `claimPushSession`, `PushPairing.pair(…, sessionScope:)` and `PushPairing.claimSession`.
+- The client was checked against the plugin source at `b167d79`: request shapes, status codes and older-plugin behaviour all match.
+
+### Not run or pending
+
+- No live run with a real device or a Hermes host running mercury-push `v0.2.0`. That comes with Mercury Chat's adoption.
+- Mercury Chat and Mercury Voice haven't adopted `0.6.0`.
 
 ## Push `device_id` routing (`feat/push-device-id`, `0.5.1`)
 
