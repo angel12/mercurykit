@@ -113,7 +113,7 @@ public struct HermesRESTClient: Sendable {
 
     /// `PATCH /api/sessions/{id}` — rename (`title`), soft-hide (`archived`),
     /// or pin a **stored** session; works without resuming it. Empty title
-    /// clears the custom name.
+    /// clears the custom name. The edit is fenced (see `mutateSession`).
     public func updateSession(
         storedID: String,
         title: String? = nil,
@@ -126,17 +126,124 @@ public struct HermesRESTClient: Sendable {
         if let archived { body["archived"] = .bool(archived) }
         if let pinned { body["pinned"] = .bool(pinned) }
         if let profile, !profile.isEmpty { body["profile"] = .string(profile) }
-        _ = try await send(
-            "PATCH", "/api/sessions/\(encodePathComponent(storedID))", body: .object(body))
+        let path = "/api/sessions/\(encodePathComponent(storedID))"
+        try await mutateSession(storedID: storedID, profile: profile) { identity in
+            var fenced = body
+            for (key, value) in identity?.fields ?? [] { fenced[key] = value }
+            _ = try await send("PATCH", path, body: .object(fenced))
+        }
     }
 
     /// `DELETE /api/sessions/{id}` — remove a stored session and its
-    /// transcript files. A 409 means a live turn or compression still owns
-    /// the row (hermes-agent `40523600b0`); it wasn't deleted.
+    /// transcript files. A 409 `session_busy` means a live turn or
+    /// compression still owns the row; it wasn't deleted. A session that is
+    /// already gone counts as deleted. The delete is fenced (see
+    /// `mutateSession`).
     public func deleteSession(storedID: String, profile: String? = nil) async throws {
-        _ = try await send(
-            "DELETE", "/api/sessions/\(encodePathComponent(storedID))",
-            query: profileQuery(profile))
+        let path = "/api/sessions/\(encodePathComponent(storedID))"
+        do {
+            try await mutateSession(storedID: storedID, profile: profile) { identity in
+                let query = profileQuery(profile) + (identity?.queryItems ?? [])
+                _ = try await send("DELETE", path, query: query)
+            }
+        } catch HermesError.httpError(status: 404, detail: "not_found") {
+            // The snapshot found no such row, or it vanished before the write.
+        }
+    }
+
+    /// Identity a fenced session edit carries: a fresh `request_id` plus the
+    /// revision (and generation) the client last saw.
+    struct SessionMutationIdentity: Sendable {
+        var requestID: String
+        var expectedRevision: Int
+        var expectedGeneration: Int?
+
+        var fields: [(String, JSONValue)] {
+            var fields: [(String, JSONValue)] = [
+                ("request_id", .string(requestID)),
+                ("expected_revision", .number(Double(expectedRevision))),
+            ]
+            if let expectedGeneration {
+                fields.append(("expected_generation", .number(Double(expectedGeneration))))
+            }
+            return fields
+        }
+
+        var queryItems: [URLQueryItem] {
+            var items = [
+                URLQueryItem(name: "request_id", value: requestID),
+                URLQueryItem(name: "expected_revision", value: String(expectedRevision)),
+            ]
+            if let expectedGeneration {
+                items.append(
+                    URLQueryItem(name: "expected_generation", value: String(expectedGeneration)))
+            }
+            return items
+        }
+    }
+
+    /// Run one fenced session edit (hermes-agent `eb329d21ba`, v0.22.2+).
+    /// Newer backends refuse an edit without `request_id` and
+    /// `expected_revision` (409 `client_upgrade_required`), so read them from
+    /// `GET /api/sessions/{id}/mutation-snapshot` first. A backend with no
+    /// snapshot route predates fencing: `write` gets `nil` and sends the plain
+    /// edit. A `revision_conflict` or `stale_generation` refusal means another
+    /// writer got there first and nothing was written, so re-read and retry
+    /// once with a new `request_id`. A row the snapshot can't find throws
+    /// 404 `not_found`, as the write itself would.
+    func mutateSession(
+        storedID: String,
+        profile: String?,
+        write: (SessionMutationIdentity?) async throws -> Void
+    ) async throws {
+        var attempt = 0
+        while true {
+            let identity = try await sessionMutationIdentity(storedID: storedID, profile: profile)
+            do {
+                try await write(identity)
+                return
+            } catch HermesError.httpError(status: 409, let detail)
+                where identity != nil && attempt == 0
+                && (detail == "revision_conflict" || detail == "stale_generation")
+            {
+                attempt += 1
+            }
+        }
+    }
+
+    private func sessionMutationIdentity(
+        storedID: String, profile: String?
+    ) async throws -> SessionMutationIdentity? {
+        let snapshot: JSONValue
+        do {
+            snapshot = try await get(
+                "/api/sessions/\(encodePathComponent(storedID))/mutation-snapshot",
+                query: profileQuery(profile))
+        } catch HermesError.httpError(status: 404, let detail?)
+            where Self.isUnroutedPath(detail)
+        {
+            return nil
+        }
+        guard snapshot["exists"]?.boolValue == true else {
+            throw HermesError.httpError(status: 404, detail: "not_found")
+        }
+        guard let revision = snapshot["runtime_revision"]?.intValue, revision >= 0 else {
+            throw HermesError.malformedResponse("mutation-snapshot returned no runtime_revision")
+        }
+        let generation = snapshot["runtime_generation"]?.intValue
+        return SessionMutationIdentity(
+            requestID: UUID().uuidString.lowercased(),
+            expectedRevision: revision,
+            expectedGeneration: generation.flatMap { $0 >= 0 ? $0 : nil })
+    }
+
+    /// The dashboard's catch-all answer for a route this backend doesn't
+    /// have, as opposed to a 404 from a route that exists.
+    static func isUnroutedPath(_ detail: String) -> Bool {
+        let lowered = detail.lowercased()
+        return lowered.contains("no such api endpoint")
+            || lowered.contains("endpoint is likely missing")
+            || lowered.contains("web ui disabled")
     }
 
     /// Percent-encode a single path segment against the RFC 3986 unreserved
