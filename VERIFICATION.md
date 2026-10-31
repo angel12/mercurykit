@@ -2,6 +2,25 @@
 
 Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`) and `0.6.0` (`01b2906`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
+## Fenced session edits (`fix/fenced-session-edits`)
+
+Run on 2026-10-30 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a). Since hermes-agent `eb329d21ba` (named error `3cdcd412d4`, shipped in v0.22.2), `PATCH` and `DELETE /api/sessions/{id}` refuse an edit without `request_id` and `expected_revision`: 409 `client_upgrade_required` when both are missing (`hermes_cli/web_server_sessions.py:269-275` at v0.22.5 `bf0203a794`). Rename, pin, archive and delete from `HermesRESTClient` all failed on those backends. Both calls now read `GET /api/sessions/{id}/mutation-snapshot` first and send a fresh `request_id` with the snapshot's `runtime_revision` and `runtime_generation` (body for `PATCH`, query for `DELETE`), as upstream Desktop does (`apps/shared/src/session-http-mutations.ts`). `origin/main` `6bb377a51d` (2026-10-30) has the same guard.
+- A backend with no snapshot route (the dashboard's catch-all 404 `No such API endpoint`) predates fencing and gets the plain edit.
+- `revision_conflict` and `stale_generation` mean nothing was written: the kit re-reads and retries once with a new `request_id`. Any other refusal (`session_busy`, a second conflict) surfaces.
+- A snapshot with `exists: false` throws 404 `not_found` for an edit and counts as success for a delete. A `DELETE` answering 404 `not_found` also counts as success.
+- No public API change.
+
+### Verified
+
+- `swift test`: **559 tests / 71 suites passed** (551 on `main`). The two existing encoding tests now script the snapshot; eight new tests cover the identity in body and query, `StrictInt`-safe integer encoding, the legacy fallback, the one retry with a new `request_id`, a second conflict surfacing, `session_busy` not retried, and absent sessions.
+- `python3 scripts/check-api-constraints.py`: passed.
+- Live, against `hermes serve` v0.22.5 (`bf0203a794`, contract 8) in token mode with two throwaway imported sessions: the pre-fix wire shape (`PATCH {"title": …}`) answered 409 `client_upgrade_required`. A probe built on this branch then renamed, pinned, unpinned, archived, unarchived and deleted the session; deleting it again succeeded; renaming it afterwards threw 404 `not_found`. A hand-sent stale revision answered 409 `revision_conflict` and a stale generation 409 `stale_generation`, the exact strings the retry matches. Both sessions were deleted afterwards.
+
+### Not run or pending
+
+- The retry was not raced live against a second writer; the scripted tests cover it.
+- Not tagged or adopted by Mercury Chat yet.
+
 ## Push session scope (`feat/push-session-scope`, `0.6.0`)
 
 Run on 2026-10-14 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a). This release wraps the plugin's per-device session scope (angel12/mercury-push#11, `b167d79`, released as mercury-push `v0.2.0`, `5a8d626`):
