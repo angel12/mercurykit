@@ -343,6 +343,13 @@ public actor HermesConnection {
                 continue
             }
 
+            // Read before the ownership check below (connect() returned on
+            // gateway.ready, so it is final). Reading it beside
+            // `gateway = client` would add a suspension between the last
+            // ownership check and publishing ready, where a stop() could be
+            // followed by a stale `.ready` and writes onto a newer lifetime.
+            let authority = await client.sessionAuthority
+
             // stop() during the handshake only sees the published `gateway`
             // (still nil here) — the local client must be closed explicitly
             // or its socket and receive loop outlive the connection.
@@ -398,7 +405,7 @@ public actor HermesConnection {
                 }
                 gateway = client
                 sendsVoiceTurn = true
-                speaksSessionAuthority = await client.sessionAuthority
+                speaksSessionAuthority = authority
                 authoritySubscriptions = [:]
                 serverRequestMethods = methods
                 failedDials = 0
@@ -409,7 +416,7 @@ public actor HermesConnection {
             } else {
                 gateway = client
                 sendsVoiceTurn = true
-                speaksSessionAuthority = await client.sessionAuthority
+                speaksSessionAuthority = authority
                 authoritySubscriptions = [:]
                 failedDials = 0
                 failingSince = nil
