@@ -5,6 +5,7 @@ import os
 public protocol GatewayDialing: Actor {
     var state: GatewayClient.State { get }
     var replayEpoch: String? { get }
+    var sessionAuthority: Bool { get }
     func setBackendCountsDeclines(_ counts: Bool)
     var closeCause: GatewayClient.CloseCause { get }
     func connect(timeout: TimeInterval) async throws
@@ -17,6 +18,7 @@ public protocol GatewayDialing: Actor {
 // must never turn a reason string into an authentication decision.
 public extension GatewayDialing {
     var replayEpoch: String? { nil }
+    var sessionAuthority: Bool { false }
     var closeCause: GatewayClient.CloseCause { .other }
     func setBackendCountsDeclines(_ counts: Bool) {}
 }
@@ -101,6 +103,11 @@ public actor GatewayClient: GatewayDialing {
     public private(set) var closeCause: CloseCause = .other
     /// `replay_epoch` from this socket's `gateway.ready` (nil on old backends).
     public private(set) var replayEpoch: String?
+    /// This socket's `gateway.ready` said `session_authority: true` (v0.23+):
+    /// it landed on the gateway's own listener, whose session verbs speak the
+    /// canonical `hermes-gateway-v1` wire (`AuthorityWire`). Always false
+    /// against standalone `hermes serve`.
+    public private(set) var sessionAuthority = false
 
     /// This socket's backend counts a 4404 as one client abstaining rather
     /// than as the answer (`client.capabilities` → `declines_not_shown`,
@@ -489,11 +496,13 @@ public actor GatewayClient: GatewayDialing {
             let params = frame["params"], let type = params["type"]?.stringValue
         {
             let event = GatewayEvent(type: type, sessionID: params["session_id"]?.stringValue,
-                payload: params["payload"] ?? .null, seq: params["seq"]?.intValue)
+                payload: params["payload"] ?? .null, seq: params["seq"]?.intValue,
+                executionGeneration: params["execution_generation"]?.intValue)
             if event.type == GatewayEvent.Kind.gatewayReady {
                 // Seq numbering identity for the WS replay contract; a later
                 // mismatch on session.events.since means the backend restarted.
                 replayEpoch = event.payload["replay_epoch"]?.stringValue
+                sessionAuthority = event.payload["session_authority"]?.boolValue == true
                 if state == .connecting {
                     state = .ready
                     for cont in readyWaiters { cont.resume() }

@@ -10,12 +10,20 @@ public struct GatewayEvent: Sendable, Equatable {
     /// backends). Sibling of `type` in the frame's params, NOT in `payload`.
     /// Basis of the reconnect replay contract (`session.events.since`).
     public var seq: Int?
+    /// Session-authority frames only (v0.23 `hermes-gateway-v1`): the
+    /// execution generation the frame belongs to, stamped beside `seq` at the
+    /// top level of `params`. The authority fences `session.interrupt` by it.
+    public var executionGeneration: Int?
 
-    public init(type: String, sessionID: String?, payload: JSONValue, seq: Int? = nil) {
+    public init(
+        type: String, sessionID: String?, payload: JSONValue, seq: Int? = nil,
+        executionGeneration: Int? = nil
+    ) {
         self.type = type
         self.sessionID = sessionID
         self.payload = payload
         self.seq = seq
+        self.executionGeneration = executionGeneration
     }
 
     /// Decode one event-frame `params` object ({type, session_id, seq,
@@ -27,7 +35,8 @@ public struct GatewayEvent: Sendable, Equatable {
             type: type,
             sessionID: params["session_id"]?.stringValue,
             payload: params["payload"] ?? .null,
-            seq: params["seq"]?.intValue)
+            seq: params["seq"]?.intValue,
+            executionGeneration: params["execution_generation"]?.intValue)
     }
 
     /// Well-known event names (open set — unknown types must be tolerated).
@@ -54,6 +63,11 @@ public struct GatewayEvent: Sendable, Equatable {
         public static let approvalCancelled = "approval.cancelled"
         public static let clarifyRequest = "clarify.request"
         public static let clarifyExpire = "clarify.expire"
+        /// Session authority (v0.23): a pending approval / clarify prompt was
+        /// resolved — by any viewer, an interrupt, or a timeout. Payload
+        /// `{prompt_id, execution_generation}`.
+        public static let approvalSettled = "approval.settled"
+        public static let clarifySettled = "clarify.settled"
         public static let sudoRequest = "sudo.request"
         public static let sudoExpire = "sudo.expire"
         public static let secretRequest = "secret.request"
@@ -247,8 +261,14 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
 
     public var sessionID: String
     /// Present on current backends (approvals are queued server-side);
-    /// absent on older ones, where session-keyed respond is exact.
+    /// absent on older ones, where session-keyed respond is exact. On a
+    /// session authority this is the prompt's `prompt_id`, which also
+    /// addresses the response.
     public var requestID: String?
+    /// Session authority only: the generation the prompt was raised in, which
+    /// `approval.respond` must echo. Nil on the legacy wire and for server
+    /// requests.
+    public var executionGeneration: Int? = nil
     public var command: String?
     public var description: String?
     /// Server-derived subset of once/session/always/deny.
@@ -280,6 +300,7 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
             var decoded = ApprovalRequest(payload: params, sessionID: sessionID)
         else { return nil }
         decoded.serverRequestID = request.id
+        decoded.executionGeneration = nil
         self = decoded
     }
 
@@ -288,7 +309,9 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
             let sessionID = event.sessionID
         else { return nil }
         self.sessionID = sessionID
-        self.requestID = event.payload["request_id"]?.stringValue
+        self.requestID =
+            event.payload["request_id"]?.stringValue ?? event.payload["prompt_id"]?.stringValue
+        self.executionGeneration = event.payload["execution_generation"]?.intValue
         self.command = event.payload["command"]?.stringValue
         self.description = event.payload["description"]?.stringValue
 
@@ -361,6 +384,10 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
 
     public var requestID: String
     public var sessionID: String?
+    /// Session authority only: the generation the prompt was raised in, which
+    /// `clarify.respond` must echo (its `prompt_id` is `requestID`). Nil on
+    /// the legacy wire and for server requests.
+    public var executionGeneration: Int? = nil
     public var question: String
     /// nil/empty = free-text question.
     public var choices: [String]
@@ -446,11 +473,15 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
     }
 
     public init?(event: GatewayEvent) {
+        // A session authority's `clarify.request` carries `prompt_id` instead
+        // of `request_id`; it is used the same way.
         guard event.type == GatewayEvent.Kind.clarifyRequest,
             let requestID = event.payload["request_id"]?.stringValue
+                ?? event.payload["prompt_id"]?.stringValue
         else { return nil }
         self.requestID = requestID
         self.sessionID = event.sessionID
+        self.executionGeneration = event.payload["execution_generation"]?.intValue
         self.question = event.payload["question"]?.stringValue ?? ""
         self.choices = Self.cleanChoices(event.payload["choices"])
         self.multiSelect = event.payload["multi_select"]?.truthy ?? false
