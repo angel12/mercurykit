@@ -75,7 +75,7 @@ public final class AudioCaptureService: AudioCaptureStreaming, @unchecked Sendab
     /// A build is between its claim and its publish-or-discard. `building` and
     /// a non-nil `engine` are mutually exclusive.
     private var building = false
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
         // Input port UID the running engine was built on, to detect real
         // input switches among the route-change noise.
         private var engineInputUID: String?
@@ -87,7 +87,7 @@ public final class AudioCaptureService: AudioCaptureStreaming, @unchecked Sendab
 
     init(makeEngine: @escaping CaptureEngineFactory) {
         self.makeEngine = makeEngine
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
             // The input route moves when a device appears/vanishes (e.g. a
             // Bluetooth headset) or when the user picks another mic
             // (`setPreferredInput` applies asynchronously, announced as
@@ -129,7 +129,7 @@ public final class AudioCaptureService: AudioCaptureStreaming, @unchecked Sendab
         #endif
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
         /// Known limitation (issue #64): the `engine != nil` guard is false for
         /// the whole of a build, so a real input switch that lands inside one
         /// is not seen here and does not supersede it. `reconfigure()`,
@@ -306,7 +306,7 @@ public final class AudioCaptureService: AudioCaptureStreaming, @unchecked Sendab
                 throw error
             }
 
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
                 let inputUID = AVAudioSession.sharedInstance().currentRoute.inputs.first?.uid
             #endif
             lock.lock()
@@ -314,7 +314,7 @@ public final class AudioCaptureService: AudioCaptureStreaming, @unchecked Sendab
             if publish {
                 self.engine = engine
                 building = false
-                #if os(iOS)
+                #if os(iOS) || os(visionOS)
                     engineInputUID = inputUID
                 #endif
             }
@@ -330,7 +330,7 @@ public final class AudioCaptureService: AudioCaptureStreaming, @unchecked Sendab
     private static func startLiveEngine(
         onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
     ) throws -> CaptureEngine {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
             try AudioSessionManager.activateForVoice()
         #endif
 

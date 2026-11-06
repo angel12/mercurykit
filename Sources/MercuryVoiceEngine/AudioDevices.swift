@@ -109,7 +109,7 @@ public final class AudioDeviceCatalog {
     }
 
     private func applyInputSelection() {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
             // `setPreferredInput` applies asynchronously; restarting the
             // engine here would rebuild it on the old route. The capture
             // service watches for the resulting route change and rebuilds a

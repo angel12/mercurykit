@@ -8,7 +8,7 @@ func shouldDetachBargeCaptureWhileMuted(isIOS: Bool) -> Bool {
     isIOS
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
     let bargeMuteRunsOnIOS = true
 #else
     let bargeMuteRunsOnIOS = false
