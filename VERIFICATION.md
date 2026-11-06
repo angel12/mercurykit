@@ -1,8 +1,46 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`) and `0.6.0` (`01b2906`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`), `0.6.0` (`01b2906`) and `0.6.1` (`c243c32`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
-## Fenced session edits (`fix/fenced-session-edits`)
+## Session controls and slash commands (`feat/session-controls-slash`)
+
+Run on 2026-11-05 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a), against hermes-agent v0.23.0 (`2bd378ed1b`, desktop contract 8). These are the per-chat controls Desktop drives over the same desktop-contract socket. Every method is a regular `methods` entry in `apps/shared/src/gateway-contract.openrpc.json`; none needs the canonical `hermes-gateway-v1` protocol, which a remote client can't reach.
+- `SessionControlsAPI.swift`:
+  - `setConfig` plus `setSessionModel` (`config.set {key: "model", value: "<model> --provider <p> --session"}`, as Desktop sends for a chat that isn't its primary tile), `setSessionReasoning`, `setSessionYolo`, `setApprovalMode`, `approvalMode` and `loadModelOptions`. They return a `ConfigSetResult` that carries `confirm_required` for an expensive model.
+  - `slashCompletions` (`complete.slash`) and `runSlash`, which tries `slash.exec` and falls back to `command.dispatch`, like `apps/desktop/src/app/session/hooks/use-prompt-actions/slash.ts`. When both fail, the `slash.exec` error is the one thrown, not the fallback's "not a quick/plugin/skill command". Results parse into `SlashOutcome` (`output`, `alias`, `send`, `prefill`), mirroring `apps/shared/src/slash.ts::parseCommandDispatch`. A skill's expanded body is `send.message`; `display` is what a bubble shows.
+  - `askSideQuestion` (`prompt.btw`), whose answer arrives as `GatewayEvent.Kind.btwComplete`.
+- `submit(sessionID:text:)` returns `PromptSubmission` with `admission_id` and `forwarded`. Since v0.22.0 one gateway owns each session, and a prompt sent while that owner runs a turn joins its queue (`tui_gateway/methods_prompt.py::_submit_to_ledger_owner`). `submitPrompt` is unchanged.
+- `HermesError.RefusalReason.sessionOwnerBusy` and `.sessionOwnerUnconfirmed` (4090). An unconfirmed forward may already be queued, so a client must not offer a retry.
+- Additive only, hence a minor bump.
+
+### Verified
+
+- `swift test`: **575 tests / 72 suites passed** (559 on `main`). 16 new tests cover:
+  - every new request's method and exact params, and the expensive-model confirm resend;
+  - parsing of model options, completions and every dispatch type, plus `SlashCommand` rejecting paths like `/usr/bin`;
+  - the `command.dispatch` fallback, and the routing-noise case surfacing the `slash.exec` error;
+  - the forwarded receipt and both owner refusal reasons.
+- Every new request shape passed `tui_gateway.contracts.registry.validate_params` at v0.23.0; an undeclared key was refused, as a control.
+- `python3 scripts/check-api-constraints.py`: passed.
+- Live, against `hermes serve` v0.23.0 in token mode, a probe built on this branch got these results:
+  - `model.options` listed 2 providers;
+  - `complete.slash` turned `/rea` into `/reasoning `;
+  - reasoning `high` and YOLO on and off were accepted;
+  - `approvalMode` read `manual`;
+  - `/help` came back as output, and so did `/goal status` (typed `exec`) and an unknown command;
+  - a same-model switch on a live agent needed no confirmation;
+  - `prompt.btw` was answered by a `btw.complete` with its task id.
+- Probe findings that shape client behavior:
+  - `slash.exec` times out on `/new` (5030), so clients open a new chat themselves.
+  - `/btw` through `slash.exec` only prints a notice, so clients use `prompt.btw`.
+  - `config.set yolo` reads back `"1"`/`"0"`; `session.info.yolo` carries the boolean.
+
+### Not run or pending
+
+- A real owner-forwarded prompt (a bot, cron or the CLI holding the turn) was not reproduced live; the scripted tests cover the receipt and both refusals.
+- Not tagged or adopted by Mercury Chat yet.
+
+## Fenced session edits (`fix/fenced-session-edits`, `0.6.1`)
 
 Run on 2026-10-30 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a). Since hermes-agent `eb329d21ba` (named error `3cdcd412d4`, shipped in v0.22.2), `PATCH` and `DELETE /api/sessions/{id}` refuse an edit without `request_id` and `expected_revision`: 409 `client_upgrade_required` when both are missing (`hermes_cli/web_server_sessions.py:269-275` at v0.22.5 `bf0203a794`). Rename, pin, archive and delete from `HermesRESTClient` all failed on those backends. Both calls now read `GET /api/sessions/{id}/mutation-snapshot` first and send a fresh `request_id` with the snapshot's `runtime_revision` and `runtime_generation` (body for `PATCH`, query for `DELETE`), as upstream Desktop does (`apps/shared/src/session-http-mutations.ts`). `origin/main` `6bb377a51d` (2026-10-30) has the same guard.
 - A backend with no snapshot route (the dashboard's catch-all 404 `No such API endpoint`) predates fencing and gets the plain edit.
@@ -19,7 +57,7 @@ Run on 2026-10-30 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a). Sin
 ### Not run or pending
 
 - The retry was not raced live against a second writer; the scripted tests cover it.
-- Not tagged or adopted by Mercury Chat yet.
+- Released as `0.6.1`; Mercury Chat adopted it in angel12/mercurychat#147.
 
 ## Push session scope (`feat/push-session-scope`, `0.6.0`)
 
