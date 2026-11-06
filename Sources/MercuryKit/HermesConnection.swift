@@ -65,10 +65,13 @@ public actor HermesConnection {
     public nonisolated let serverRequestPolicy: ServerRequestPolicy
     /// Whether this connection speaks the v0.23 session-authority wire when a
     /// socket's `gateway.ready` says `session_authority: true`. Off by
-    /// default, so every frame stays what 0.6.1 sent. Mercury Chat leaves it
-    /// off until it answers prompts on the canonical wire (`request.answer`,
-    /// `events.since` and `steer` are not translated); Mercury Voice's engine
-    /// host turns it on.
+    /// default, so every frame stays what 0.6.1 sent. With it on, the calls
+    /// the authority shapes differently are translated (session lifecycle,
+    /// prompt responses, `session.mutate` controls, generation-fenced
+    /// interrupt / steer / redirect, the shared queue); `request.answer` and
+    /// `session.events.since` are served unchanged. Mercury Chat and Mercury
+    /// Voice's engine host both turn it on. A socket whose `gateway.ready`
+    /// lacks the flag stays on the legacy wire either way.
     public nonisolated let adoptsSessionAuthority: Bool
     /// The server→client request methods the backend said it may send, from
     /// the current socket's `client.capabilities` reply. Nil while not
