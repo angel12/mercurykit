@@ -2,6 +2,29 @@
 
 Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`), `0.6.0` (`01b2906`), `0.6.1` (`c243c32`) and `0.7.0` (`705fbee`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
+## Event admission id (`claude/event-admission-id`)
+
+Run on 2026-11-06 on macOS 26.7.1 (arm64), against hermes-agent v0.23.0 (`2bd378ed1b`, the installed backend), read from source.
+
+Where hermes puts it:
+- `gateway/session_events.py` `SessionEvents.publish` spreads the session's execution stamp into the frame's `params`, beside `type`, `session_id`, `seq` and `replay_epoch`. It is never in `payload`.
+- `gateway/session_authority.py` `_stamp_claim` sets that stamp to `{authority_epoch, execution_generation, admission_id}` when an admission is claimed. The stamp is `{}` while the session is idle.
+- `_settle_cancelled` stamps a cancelled *queued* admission's `message.complete` with `{authority_epoch, admission_id}` and no generation, while the running turn's stamp is set aside. So a `message.complete` can name an admission other than the running one.
+- `session.events.since` returns the same `params` objects. `tui_gateway/contracts/canonical_sessions.py` `CanonicalReplayEvent` declares `admission_id: str | None`, and `catch_up` writes replayed frames as ordinary live frames.
+- A resume snapshot (`CanonicalSnapshot`) carries no event frames. Its admission ids are in `pending`, which `QueuedPrompt` already decodes.
+
+What changed: `GatewayEvent.admissionID` (optional, defaulted in the memberwise init), decoded in `init(eventParams:)`. `GatewayClient` now decodes live frames through that same initializer, so live and replayed events can't drift apart. The `adoptsSessionAuthority` doc no longer says Chat leaves it off or that `request.answer` / `events.since` / `steer` are untranslated.
+
+### Verified
+
+- `swift test`: **MercuryKit 649 tests / 85 suites** (7 new in `EventAdmissionIDTests`) and **MercuryVoiceEngine 338 / 49**, all passing. `check-api-constraints.py` passed.
+- The new tests cover decoding with the field, without it, empty or non-string values, a payload-only `admission_id` (not the envelope), the old memberwise init, a replay batch that mixes two admissions with an idle frame, and a live loopback socket frame.
+
+### Not run or pending
+
+- No live gateway check. Placement is read from the hermes source above.
+- Not tagged. Mercury Chat's `TurnAttribution` adopts it after a release.
+
 ## Shared queue and canonical chat (`feat/canonical-chat`)
 
 Run on 2026-11-05 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a), against hermes-agent v0.23.0 (`2bd378ed1b`). This builds on 0.8.0's opt-in session-authority wire (#21) and closes what a chat client needs on a v0.23 gateway listener (the Webapp), where every `/api/ws` socket is canonical.

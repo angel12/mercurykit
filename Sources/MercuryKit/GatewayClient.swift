@@ -493,11 +493,8 @@ public actor GatewayClient: GatewayDialing {
         // frame with another method and a string id is a server request;
         // everything else is a response.
         if frame["method"]?.stringValue == "event",
-            let params = frame["params"], let type = params["type"]?.stringValue
+            let params = frame["params"], let event = GatewayEvent(eventParams: params)
         {
-            let event = GatewayEvent(type: type, sessionID: params["session_id"]?.stringValue,
-                payload: params["payload"] ?? .null, seq: params["seq"]?.intValue,
-                executionGeneration: params["execution_generation"]?.intValue)
             if event.type == GatewayEvent.Kind.gatewayReady {
                 // Seq numbering identity for the WS replay contract; a later
                 // mismatch on session.events.since means the backend restarted.

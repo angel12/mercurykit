@@ -14,21 +14,35 @@ public struct GatewayEvent: Sendable, Equatable {
     /// execution generation the frame belongs to, stamped beside `seq` at the
     /// top level of `params`. The authority fences `session.interrupt` by it.
     public var executionGeneration: Int?
+    /// Session-authority frames only (v0.23 `hermes-gateway-v1`): the
+    /// admission (queued prompt) the frame belongs to, the same id
+    /// `prompt.submit` returned and `QueuedPrompt.admissionID` lists. Stamped
+    /// beside `seq` at the top level of `params` (never in `payload`) on every
+    /// frame the authority publishes while an admission is claimed — its
+    /// `message.start` through `message.complete` and everything in between,
+    /// `session.info` queue fanouts included. Cancelling a still-queued
+    /// admission also publishes a `message.complete` stamped with *that*
+    /// admission's id (and no `executionGeneration`), possibly while another
+    /// admission is running, so attribute turn ends by this id, not by order.
+    /// Nil on frames published while the session is idle, on session-less
+    /// frames, and from a legacy socket. `session.events.since` replays keep it.
+    public var admissionID: String?
 
     public init(
         type: String, sessionID: String?, payload: JSONValue, seq: Int? = nil,
-        executionGeneration: Int? = nil
+        executionGeneration: Int? = nil, admissionID: String? = nil
     ) {
         self.type = type
         self.sessionID = sessionID
         self.payload = payload
         self.seq = seq
         self.executionGeneration = executionGeneration
+        self.admissionID = admissionID
     }
 
     /// Decode one event-frame `params` object ({type, session_id, seq,
-    /// payload}) — the shape both the live socket and the
-    /// `session.events.since` replay batches carry.
+    /// execution_generation, admission_id, payload}) — the shape both the
+    /// live socket and the `session.events.since` replay batches carry.
     public init?(eventParams params: JSONValue) {
         guard let type = params["type"]?.stringValue else { return nil }
         self.init(
@@ -36,7 +50,8 @@ public struct GatewayEvent: Sendable, Equatable {
             sessionID: params["session_id"]?.stringValue,
             payload: params["payload"] ?? .null,
             seq: params["seq"]?.intValue,
-            executionGeneration: params["execution_generation"]?.intValue)
+            executionGeneration: params["execution_generation"]?.intValue,
+            admissionID: params["admission_id"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 })
     }
 
     /// Well-known event names (open set — unknown types must be tolerated).
