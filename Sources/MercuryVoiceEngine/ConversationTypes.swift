@@ -1,0 +1,289 @@
+import Foundation
+
+// Protocol seams for the conversation engine. The real implementations wrap
+// AVFoundation + the Hermes gateway; tests inject fakes and a manual clock.
+
+public enum ConversationStatus: String, Sendable, Equatable {
+    case idle
+    case listening
+    case transcribing
+    case thinking
+    case speaking
+}
+
+public struct RecordedUtterance: Sendable, Equatable {
+    public var audio: Data
+    public var mimeType: String
+    public var duration: Duration
+    public var heardSpeech: Bool
+
+    public init(audio: Data, mimeType: String, duration: Duration, heardSpeech: Bool) {
+        self.audio = audio
+        self.mimeType = mimeType
+        self.duration = duration
+        self.heardSpeech = heardSpeech
+    }
+}
+
+public struct VADParameters: Sendable, Equatable {
+    public var speechLevel: Double
+    public var endOfTurnSilence: Duration
+    public var idleGiveUp: Duration
+    public var maxRecording: Duration
+
+    public init(
+        speechLevel: Double = VoiceConstants.speechLevel,
+        endOfTurnSilence: Duration = VoiceConstants.endOfTurnSilence,
+        idleGiveUp: Duration = VoiceConstants.idleGiveUp,
+        maxRecording: Duration = VoiceConstants.maxRecording
+    ) {
+        self.speechLevel = speechLevel
+        self.endOfTurnSilence = endOfTurnSilence
+        self.idleGiveUp = idleGiveUp
+        self.maxRecording = maxRecording
+    }
+}
+
+/// The listening-phase microphone: capture + VAD endpointing.
+public protocol VoiceRecording: Sendable {
+    /// Begin capturing. `onAutoStop` fires once when VAD ends the turn
+    /// (trailing silence after speech, or idle give-up with none). Throws when
+    /// the microphone is unavailable.
+    func start(vad: VADParameters, onAutoStop: @escaping @Sendable () -> Void) async throws
+    /// Stop and return what was captured (nil if nothing usable).
+    func stop() async -> RecordedUtterance?
+    /// Discard without producing a result.
+    func cancel() async
+}
+
+/// The full-duplex barge-in monitor (runs during thinking/speaking).
+public protocol BargeMonitoring: Sendable {
+    /// `onSpeech` fires once when sustained speech trips the monitor;
+    /// `onUtterance` later delivers the endpointed capture (with pre-roll),
+    /// nil when nothing usable. The monitor cleans itself up before
+    /// delivering the utterance.
+    func start(
+        isPlaying: @escaping @Sendable () async -> Bool,
+        onSpeech: @escaping @Sendable () -> Void,
+        onUtterance: @escaping @Sendable (RecordedUtterance?) -> Void
+    ) async throws
+    /// True from the instant sustained speech trips the monitor until the
+    /// capture is delivered, dropped or the monitor is stopped.
+    ///
+    /// Synchronous on purpose (issue #87): the engine asks this from actor
+    /// jobs that must decide "does a barge capture own the mic?" without
+    /// suspending first, and its own bookkeeping only flips once `onSpeech`
+    /// has hopped onto the engine actor — for the length of that hop the
+    /// monitor is already recording while the engine still believes nothing
+    /// is in flight, and a teardown decided in that window loses the
+    /// utterance for good.
+    var isCapturing: Bool { get }
+    func stop() async
+    /// Mute/pause: make the monitor deaf. macOS keeps the mic stream open and
+    /// discards audio (stopping a voice-processing unit mid-TTS kills
+    /// playback). iOS detaches the capture consumer so the hardware mic can
+    /// stop; the engine restarts the monitor on unmute.
+    func setSuspended(_ suspended: Bool) async
+}
+
+extension BargeMonitoring {
+    /// Existing conformers keep compiling and keep their old behaviour: a
+    /// monitor that never claims the mic leaves the engine exactly as blind
+    /// as it was before `isCapturing` existed. Anything that can trip must
+    /// override it — the default is compatibility, not correctness.
+    public var isCapturing: Bool { false }
+}
+
+public protocol Transcribing: Sendable {
+    /// Returns the transcript; empty string means silence (re-listen quietly).
+    func transcribe(_ utterance: RecordedUtterance) async throws -> String
+    /// A transcription is coming: the mic just opened (or a barge-in started
+    /// capturing). Must return promptly — it runs on the listen path; any
+    /// real work belongs in a task `transcribe` can wait for.
+    func prepare() async
+    /// The listening mic just opened: start transcribing it live, or nil
+    /// when this transcriber can't. Must return promptly, like `prepare`.
+    /// Barge-in captures never stream — they arrive whole, with pre-roll.
+    func startLive() async -> (any LiveTranscribing)?
+}
+
+extension Transcribing {
+    public func prepare() async {}
+    public func startLive() async -> (any LiveTranscribing)? { nil }
+}
+
+public enum SpeechStreamOutcome: Sendable, Equatable {
+    case done
+    /// The configured TTS provider has no chunked API — use the whole-clip
+    /// fallback endpoint instead.
+    case fallback
+}
+
+/// One speak-stream session (one spoken reply).
+public protocol SpeechStreaming: Sendable {
+    func append(_ text: String) async
+    /// Send `{"done": true}` — only when the reply text is complete AND the
+    /// turn is no longer busy.
+    func finish() async
+    /// Await the terminal outcome (stream ended + playback drained, or
+    /// fallback requested before any audio).
+    func waitDone() async -> SpeechStreamOutcome
+}
+
+/// Speech output owner: the streaming path, the whole-clip fallback, and the
+/// stop/sequence protocol the engine uses to detect user Stops.
+public protocol SpeechPlaying: Sendable {
+    /// Open a streaming session. Contract (the engine's +1 accounting relies
+    /// on it): this bumps `sequence` exactly once via an internal
+    /// `stopPlayback`. Returns nil when streaming can't even be attempted.
+    func startStream() async -> (any SpeechStreaming)?
+    /// Whole-clip fallback. Does NOT stop current playback or bump
+    /// `sequence` — the engine stops + captures the sequence first, so a
+    /// user Stop during fallback playback is detectable.
+    ///
+    /// `expectedSequence` is that captured generation. Check it at entry
+    /// *and* after synthesis: a Stop can land after the caller read the
+    /// snapshot but before this method begins, and capturing `sequence`
+    /// again here would adopt the Stop as this clip's generation.
+    func playFallback(text: String, expectedSequence: Int) async -> Bool
+    /// Prompt notice with the caller task as its lifetime. Implementations that
+    /// support scoped cancellation must refuse cancelled synthesis and stop only
+    /// this notice's clip, including cancellation before clip start.
+    func playAnnouncement(text: String, expectedSequence: Int) async -> Bool
+    /// Stop all playback immediately. Bumps `sequence`.
+    func stopPlayback() async
+    /// Monotonic count of stopPlayback calls — the stop-detection protocol.
+    var sequence: Int { get async }
+    /// True while audio is audibly playing (barge-in trigger clamp).
+    var isSpeaking: Bool { get async }
+}
+
+extension SpeechPlaying {
+    /// Compatibility for existing conformers. Override to enforce cancellation
+    /// through synthesis and delivery; HermesSpeechOutput does so without a
+    /// global Stop or changing ordinary fallback semantics.
+    public func playAnnouncement(text: String, expectedSequence: Int) async -> Bool {
+        await playFallback(text: text, expectedSequence: expectedSequence)
+    }
+
+    /// Callers that have not already snapshot the generation (prompt-notice
+    /// speech) capture `sequence` at entry — the engine must pass its own
+    /// snapshot instead, or a Stop between the two hops is absorbed.
+    public func playFallback(text: String) async -> Bool {
+        await playFallback(text: text, expectedSequence: await sequence)
+    }
+}
+
+/// What the engine can say/see about the current spoken reply. Mirrors the
+/// desktop's `collectUnspokenTurnSpeech` selector.
+public struct PendingSpeech: Sendable, Equatable {
+    /// Id of the first unspoken assistant bubble — stable for the turn.
+    public var id: String
+    /// All unspoken bubbles joined with blank lines (a sentence boundary for
+    /// the server's cutter). Must grow append-only within a turn.
+    public var text: String
+    /// True while the last bubble is still streaming.
+    public var pending: Bool
+
+    public init(id: String, text: String, pending: Bool) {
+        self.id = id
+        self.text = text
+        self.pending = pending
+    }
+}
+
+/// The agent seam: submit/interrupt plus turn-busy and unspoken-reply state.
+public protocol AgentInterfacing: Sendable {
+    var isBusy: Bool { get async }
+    func pendingSpeech() async -> PendingSpeech?
+    /// Advance the spoken watermark past everything currently visible.
+    func consumePendingSpeech() async
+    func submit(text: String, interrupted: Bool) async throws
+    func interrupt() async
+}
+
+/// Out-of-band signals from the engine to its owner.
+public struct ConversationCallbacks: Sendable {
+    public var onStopWord: @Sendable () -> Void
+    public var onFatalError: @Sendable (String) -> Void
+    public var onNotice: @Sendable (String) -> Void
+    /// A listening turn closed with speech that is being sent for
+    /// transcription (both the VAD path and the barge-in capture path).
+    /// Fires before the transcript exists — silence-only turns never fire it.
+    public var onTurnCaptured: @Sendable () -> Void
+    /// Periodic tick while the agent is thinking (status == .thinking),
+    /// every `VoiceConstants.thinkingChimeInterval`; suppressed while paused.
+    public var onThinkingTick: @Sendable () -> Void
+    /// Whether a mic-start failure should end the conversation (default) or
+    /// park the engine paused for a later resume. iOS refuses to START audio
+    /// I/O from the background or during an interruption (issue #31) — those
+    /// refusals are transient, unlike a missing device or permission.
+    public var micFailureIsFatal: @Sendable () async -> Bool
+    /// Fired when a mic-start failure parked the engine instead of ending
+    /// the conversation; the owner resumes with `setPaused(false)`.
+    public var onMicParked: @Sendable () -> Void
+    /// Fired when the system microphone permission is denied at arm time.
+    /// The engine has already disabled itself and set
+    /// `ConversationUIState.microphoneDenied`; the owner shows the way to
+    /// the privacy settings and restarts with `start()` once fixed.
+    public var onMicrophoneDenied: @Sendable () -> Void
+    /// The line to speak when `submit` fails, or nil to only show the
+    /// "Send failed" notice. Spoken before the mic re-opens, so it is never
+    /// heard by the next listen (issue #146).
+    public var spokenSubmitFailure: @Sendable (any Error) -> String?
+    /// Whether talking over the agent interrupts it, read each time the
+    /// barge-in monitor would arm, so a change applies from the next reply
+    /// (`BargeInPreference` in the app; issue #146).
+    public var bargeInEnabled: @Sendable () -> Bool
+
+    public init(
+        onStopWord: @escaping @Sendable () -> Void = {},
+        onFatalError: @escaping @Sendable (String) -> Void = { _ in },
+        onNotice: @escaping @Sendable (String) -> Void = { _ in },
+        onTurnCaptured: @escaping @Sendable () -> Void = {},
+        onThinkingTick: @escaping @Sendable () -> Void = {},
+        micFailureIsFatal: @escaping @Sendable () async -> Bool = { true },
+        onMicParked: @escaping @Sendable () -> Void = {},
+        onMicrophoneDenied: @escaping @Sendable () -> Void = {},
+        spokenSubmitFailure: @escaping @Sendable (any Error) -> String? = { _ in nil },
+        bargeInEnabled: @escaping @Sendable () -> Bool = { true }
+    ) {
+        self.onStopWord = onStopWord
+        self.onFatalError = onFatalError
+        self.onNotice = onNotice
+        self.onTurnCaptured = onTurnCaptured
+        self.onThinkingTick = onThinkingTick
+        self.micFailureIsFatal = micFailureIsFatal
+        self.onMicParked = onMicParked
+        self.onMicrophoneDenied = onMicrophoneDenied
+        self.spokenSubmitFailure = spokenSubmitFailure
+        self.bargeInEnabled = bargeInEnabled
+    }
+}
+
+public struct ConversationUIState: Sendable, Equatable {
+    public var status: ConversationStatus
+    public var enabled: Bool
+    public var muted: Bool
+    public var paused: Bool
+    public var lastTranscript: String?
+    /// The microphone permission was refused when the mic tried to arm. The
+    /// loop is disabled until `start()` succeeds again.
+    public var microphoneDenied: Bool
+
+    public init(
+        status: ConversationStatus = .idle,
+        enabled: Bool = false,
+        muted: Bool = false,
+        paused: Bool = false,
+        lastTranscript: String? = nil,
+        microphoneDenied: Bool = false
+    ) {
+        self.status = status
+        self.enabled = enabled
+        self.muted = muted
+        self.paused = paused
+        self.lastTranscript = lastTranscript
+        self.microphoneDenied = microphoneDenied
+    }
+}

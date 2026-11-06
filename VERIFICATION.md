@@ -1,6 +1,6 @@
 # Standalone MercuryKit verification
 
-Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`), `0.6.0` (`01b2906`) and `0.6.1` (`c243c32`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
+Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`), `0.6.0` (`01b2906`), `0.6.1` (`c243c32`) and `0.7.0` (`705fbee`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
 ## Session controls and slash commands (`feat/session-controls-slash`)
 
@@ -38,7 +38,7 @@ Run on 2026-11-05 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a), aga
 ### Not run or pending
 
 - A real owner-forwarded prompt (a bot, cron or the CLI holding the turn) was not reproduced live; the scripted tests cover the receipt and both refusals.
-- Not tagged or adopted by Mercury Chat yet.
+- Released as `0.7.0`; Mercury Chat adopts it in angel12/mercurychat#149.
 
 ## Fenced session edits (`fix/fenced-session-edits`, `0.6.1`)
 

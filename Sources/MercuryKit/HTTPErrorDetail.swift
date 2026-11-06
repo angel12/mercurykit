@@ -20,8 +20,8 @@ public enum HTTPErrorDetail {
     /// REST/auth `detail` field, already capped and redacted. `nil` when the
     /// body is not JSON or has no string `detail` (login keeps that optional).
     package static func restJSONDetail(_ data: Data) -> String? {
-        (try? JSONDecoder().decode(JSONValue.self, from: data))?["detail"]?
-            .stringValue.map(displayed)
+        let detail = (try? JSONDecoder().decode(JSONValue.self, from: data))?["detail"]
+        return (detail?.stringValue ?? detail?["message"]?.stringValue).map(displayed)
     }
 
     public static func load(

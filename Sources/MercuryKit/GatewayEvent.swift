@@ -10,12 +10,20 @@ public struct GatewayEvent: Sendable, Equatable {
     /// backends). Sibling of `type` in the frame's params, NOT in `payload`.
     /// Basis of the reconnect replay contract (`session.events.since`).
     public var seq: Int?
+    /// Session-authority frames only (v0.23 `hermes-gateway-v1`): the
+    /// execution generation the frame belongs to, stamped beside `seq` at the
+    /// top level of `params`. The authority fences `session.interrupt` by it.
+    public var executionGeneration: Int?
 
-    public init(type: String, sessionID: String?, payload: JSONValue, seq: Int? = nil) {
+    public init(
+        type: String, sessionID: String?, payload: JSONValue, seq: Int? = nil,
+        executionGeneration: Int? = nil
+    ) {
         self.type = type
         self.sessionID = sessionID
         self.payload = payload
         self.seq = seq
+        self.executionGeneration = executionGeneration
     }
 
     /// Decode one event-frame `params` object ({type, session_id, seq,
@@ -27,7 +35,8 @@ public struct GatewayEvent: Sendable, Equatable {
             type: type,
             sessionID: params["session_id"]?.stringValue,
             payload: params["payload"] ?? .null,
-            seq: params["seq"]?.intValue)
+            seq: params["seq"]?.intValue,
+            executionGeneration: params["execution_generation"]?.intValue)
     }
 
     /// Well-known event names (open set — unknown types must be tolerated).
@@ -49,8 +58,16 @@ public struct GatewayEvent: Sendable, Equatable {
         // prompts as server→client requests instead (`serverRequest` below)
         // and never emits the events or their `.expire` companions.
         public static let approvalRequest = "approval.request"
+        /// Broadcast: an interrupt, reap or teardown deny-resolved pending
+        /// approvals (upstream 591e3a7ce1).
+        public static let approvalCancelled = "approval.cancelled"
         public static let clarifyRequest = "clarify.request"
         public static let clarifyExpire = "clarify.expire"
+        /// Session authority (v0.23): a pending approval / clarify prompt was
+        /// resolved — by any viewer, an interrupt, or a timeout. Payload
+        /// `{prompt_id, execution_generation}`.
+        public static let approvalSettled = "approval.settled"
+        public static let clarifySettled = "clarify.settled"
         public static let sudoRequest = "sudo.request"
         public static let sudoExpire = "sudo.expire"
         public static let secretRequest = "secret.request"
@@ -185,12 +202,13 @@ public struct EventReplayBatch: Sendable, Equatable {
     ///   caller with no epoch at all and never reaches this check.
     /// - `latest_seq` is the session's current highest stamp, read straight
     ///   after the frames, so it is never below the watermark the client
-    ///   reached — *unless* the ring was evicted, which drops the counter
-    ///   with it (`_replay_next_seq.pop`) and restarts the session at 1 while
-    ///   `truncated` reads False because the ring is simply gone. A
-    ///   `latest_seq` below the watermark (0 for an evicted session), or one
-    ///   that is absent or unreadable, is the only trace that renumbering
-    ///   leaves, so it is refused.
+    ///   reached. Backends before upstream 12c3d5c968 dropped the counter
+    ///   with an evicted ring (`_replay_next_seq.pop`), restarting the
+    ///   session at 1 while `truncated` read False; a `latest_seq` below the
+    ///   watermark, or one absent or unreadable, is the trace that leaves, so
+    ///   it is refused. Since 12c3d5c968 eviction keeps the counter and
+    ///   raises the truncation watermark instead, so an old watermark gets
+    ///   `truncated: true` and never reaches this check.
     /// - Every replayed frame is stamped with an integer `seq` and carries
     ///   the session id it was requested for (`_stamp_event` only records
     ///   frames with a session id, and `events_since` reads that session's
@@ -205,11 +223,10 @@ public struct EventReplayBatch: Sendable, Equatable {
     /// lexical JSON numbers: rounded fractions and large counters cannot be
     /// recovered here. Int(exactly:) checks the represented value only.
     ///
-    /// Residual, and a backend limitation rather than something a client can
-    /// see: an evicted session whose new counter catches up to `watermark`
-    /// can answer exactly like a real continuation. Only
-    /// a per-session epoch (or an `is_truncated` that reported a missing
-    /// ring) could distinguish it.
+    /// Residual, on backends before 12c3d5c968 only: an evicted session whose
+    /// restarted counter catches up to `watermark` can answer exactly like a
+    /// real continuation. Current backends keep seq monotonic across eviction
+    /// and report the lost ring as `truncated`, which closes it.
     public func isLossless(
         under expected: String, forSession sessionID: String, after watermark: Int
     ) -> Bool {
@@ -246,8 +263,14 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
 
     public var sessionID: String
     /// Present on current backends (approvals are queued server-side);
-    /// absent on older ones, where session-keyed respond is exact.
+    /// absent on older ones, where session-keyed respond is exact. On a
+    /// session authority this is the prompt's `prompt_id`, which also
+    /// addresses the response.
     public var requestID: String?
+    /// Session authority only: the generation the prompt was raised in, which
+    /// `approval.respond` must echo. Nil on the legacy wire and for server
+    /// requests.
+    public var executionGeneration: Int? = nil
     public var command: String?
     public var description: String?
     /// Server-derived subset of once/session/always/deny.
@@ -279,6 +302,7 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
             var decoded = ApprovalRequest(payload: params, sessionID: sessionID)
         else { return nil }
         decoded.serverRequestID = request.id
+        decoded.executionGeneration = nil
         self = decoded
     }
 
@@ -287,7 +311,9 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
             let sessionID = event.sessionID
         else { return nil }
         self.sessionID = sessionID
-        self.requestID = event.payload["request_id"]?.stringValue
+        self.requestID =
+            event.payload["request_id"]?.stringValue ?? event.payload["prompt_id"]?.stringValue
+        self.executionGeneration = event.payload["execution_generation"]?.intValue
         self.command = event.payload["command"]?.stringValue
         self.description = event.payload["description"]?.stringValue
 
@@ -360,6 +386,10 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
 
     public var requestID: String
     public var sessionID: String?
+    /// Session authority only: the generation the prompt was raised in, which
+    /// `clarify.respond` must echo (its `prompt_id` is `requestID`). Nil on
+    /// the legacy wire and for server requests.
+    public var executionGeneration: Int? = nil
     public var question: String
     /// nil/empty = free-text question.
     public var choices: [String]
@@ -369,6 +399,8 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
     /// Batch answers already locked server-side (qid → answer) — present on
     /// the resume payload's `pending_clarify` snapshot after a reconnect,
     /// and on a replayed contract ≥ 7 request (`params.answers`).
+    /// A skipped lock (`null` on the wire) is `""`, which the server also
+    /// reads as skipped — it is locked, never asked again.
     public var lockedAnswers: [String: String]
     /// The `srq-<hex>` id of the server→client request this came from
     /// (contract ≥ 7; equal to `requestID`). Answer it with
@@ -404,6 +436,10 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
         if let answers = promptValue(params["answers"]) {
             guard let object = answers.objectValue else { return nil }
             for (qid, value) in object {
+                if case .null = value {
+                    locked[qid] = ""
+                    continue
+                }
                 guard let answer = value.stringValue else { return nil }
                 locked[qid] = answer
             }
@@ -439,11 +475,15 @@ public struct ClarifyRequest: Sendable, Equatable, Identifiable {
     }
 
     public init?(event: GatewayEvent) {
+        // A session authority's `clarify.request` carries `prompt_id` instead
+        // of `request_id`; it is used the same way.
         guard event.type == GatewayEvent.Kind.clarifyRequest,
             let requestID = event.payload["request_id"]?.stringValue
+                ?? event.payload["prompt_id"]?.stringValue
         else { return nil }
         self.requestID = requestID
         self.sessionID = event.sessionID
+        self.executionGeneration = event.payload["execution_generation"]?.intValue
         self.question = event.payload["question"]?.stringValue ?? ""
         self.choices = Self.cleanChoices(event.payload["choices"])
         self.multiSelect = event.payload["multi_select"]?.truthy ?? false

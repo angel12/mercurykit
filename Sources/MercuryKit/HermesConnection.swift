@@ -63,6 +63,13 @@ public actor HermesConnection {
     public private(set) var phase: Phase = .stopped
     /// This app's contract-7 switch (see `ServerRequestPolicy`).
     public nonisolated let serverRequestPolicy: ServerRequestPolicy
+    /// Whether this connection speaks the v0.23 session-authority wire when a
+    /// socket's `gateway.ready` says `session_authority: true`. Off by
+    /// default, so every frame stays what 0.6.1 sent. Mercury Chat leaves it
+    /// off until it answers prompts on the canonical wire (`request.answer`,
+    /// `events.since` and `steer` are not translated); Mercury Voice's engine
+    /// host turns it on.
+    public nonisolated let adoptsSessionAuthority: Bool
     /// The server→client request methods the backend said it may send, from
     /// the current socket's `client.capabilities` reply. Nil while not
     /// ready, when the policy is disabled, or when the advertisement failed
@@ -74,6 +81,22 @@ public actor HermesConnection {
     private var supervisor: Task<Void, Never>?
     private var supervisorLifetime: UUID?
     private var everConnected = false
+    /// `prompt.submit` may carry `voice_turn` until this backend rejects it
+    /// (see `submitPrompt`); re-armed on every new gateway connection, since
+    /// the backend may have been upgraded in between.
+    var sendsVoiceTurn = true
+    /// The current socket landed on a v0.23 session authority (its
+    /// `gateway.ready` said so); session calls then go out in the canonical
+    /// shapes (`AuthorityWire`). Re-read on every new gateway connection.
+    var speaksSessionAuthority = false
+    /// Session authority: this socket's `subscription_id` per session, from
+    /// create/resume, which `session.detach` must name. Subscriptions die
+    /// with the socket, so this is cleared on every new connection.
+    var authoritySubscriptions: [String: String] = [:]
+    /// Session authority: the newest `execution_generation` seen per session
+    /// (create/resume/submit results and event frames), which
+    /// `session.interrupt` is fenced by.
+    var executionGenerations: [String: Int] = [:]
     private var reconnectPoke: CheckedContinuation<Void, Never>?
     private var backoffTimer: Task<Void, Never>?
     private var subscribers: [UUID: AsyncStream<Update>.Continuation] = [:]
@@ -96,12 +119,15 @@ public actor HermesConnection {
     /// `serverRequestPolicy` is the contract-7 switch: `.disabled` (the
     /// default) keeps contract-6 behaviour exactly; any other policy
     /// advertises `client.capabilities` on every socket and routes the
-    /// requests it names (see `ServerRequestPolicy`).
+    /// requests it names (see `ServerRequestPolicy`). `adoptsSessionAuthority`
+    /// opts into the v0.23 session-authority wire (see its property doc).
     public init(endpoint: ServerEndpoint, authenticator: HermesAuthenticator,
                 reconnectPolicy: ReconnectPolicy = .chat,
-                serverRequestPolicy: ServerRequestPolicy = .disabled) {
+                serverRequestPolicy: ServerRequestPolicy = .disabled,
+                adoptsSessionAuthority: Bool = false) {
         self.init(endpoint: endpoint, authenticator: authenticator,
                   reconnectPolicy: reconnectPolicy, serverRequestPolicy: serverRequestPolicy,
+                  adoptsSessionAuthority: adoptsSessionAuthority,
                   supervisorCheckpoint: nil)
     }
 
@@ -110,6 +136,7 @@ public actor HermesConnection {
     init(endpoint: ServerEndpoint, authenticator: HermesAuthenticator,
          reconnectPolicy: ReconnectPolicy = .chat,
          serverRequestPolicy: ServerRequestPolicy = .disabled,
+         adoptsSessionAuthority: Bool = false,
          supervisorCheckpoint: (@Sendable (SupervisorCheckpoint) async -> Void)?,
          backoffDelay: TimeInterval? = nil,
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
@@ -119,6 +146,7 @@ public actor HermesConnection {
         self.backoffDelay = backoffDelay
         self.reconnectPolicy = reconnectPolicy
         self.serverRequestPolicy = serverRequestPolicy
+        self.adoptsSessionAuthority = adoptsSessionAuthority
         self.now = now
         self.sleeper = sleeper
         self.makeClient = makeClient ?? {
@@ -141,12 +169,14 @@ public actor HermesConnection {
     }
 
     public init(endpoint: ServerEndpoint, token: String?, reconnectPolicy: ReconnectPolicy = .chat,
-                serverRequestPolicy: ServerRequestPolicy = .disabled) {
+                serverRequestPolicy: ServerRequestPolicy = .disabled,
+                adoptsSessionAuthority: Bool = false) {
         self.init(endpoint: endpoint,
                   authenticator: HermesAuthenticator(endpoint: endpoint,
                       credentials: token.map { .sessionToken($0) }),
                   reconnectPolicy: reconnectPolicy,
-                  serverRequestPolicy: serverRequestPolicy)
+                  serverRequestPolicy: serverRequestPolicy,
+                  adoptsSessionAuthority: adoptsSessionAuthority)
     }
 
     // MARK: Subscriptions
@@ -260,6 +290,12 @@ public actor HermesConnection {
         }
     }
 
+    /// Keep the newest generation per session; frames and results can
+    /// arrive out of order relative to each other.
+    func noteExecutionGeneration(_ generation: Int, for sessionID: String) {
+        executionGenerations[sessionID] = max(executionGenerations[sessionID] ?? generation, generation)
+    }
+
     // MARK: Supervisor
 
     private func ownsSupervisor(_ lifetime: UUID) -> Bool {
@@ -321,6 +357,13 @@ public actor HermesConnection {
                 continue
             }
 
+            // Read before the ownership check below (connect() returned on
+            // gateway.ready, so it is final). Reading it beside
+            // `gateway = client` would add a suspension between the last
+            // ownership check and publishing ready, where a stop() could be
+            // followed by a stale `.ready` and writes onto a newer lifetime.
+            let authority = await client.sessionAuthority
+
             // stop() during the handshake only sees the published `gateway`
             // (still nil here) — the local client must be closed explicitly
             // or its socket and receive loop outlive the connection.
@@ -375,6 +418,10 @@ public actor HermesConnection {
                     continue
                 }
                 gateway = client
+                sendsVoiceTurn = true
+                speaksSessionAuthority = adoptsSessionAuthority && authority
+                authoritySubscriptions = [:]
+                executionGenerations = [:]
                 serverRequestMethods = methods
                 failedDials = 0
                 failingSince = nil
@@ -383,6 +430,10 @@ public actor HermesConnection {
                 everConnected = true
             } else {
                 gateway = client
+                sendsVoiceTurn = true
+                speaksSessionAuthority = adoptsSessionAuthority && authority
+                authoritySubscriptions = [:]
+                executionGenerations = [:]
                 failedDials = 0
                 failingSince = nil
                 attempt = 0
@@ -397,6 +448,9 @@ public actor HermesConnection {
             for await event in events {
                 if let supervisorCheckpoint { await supervisorCheckpoint(.eventReceived) }
                 if !ownsSupervisor(lifetime) { break }
+                if let sessionID = event.sessionID, let generation = event.executionGeneration {
+                    noteExecutionGeneration(generation, for: sessionID)
+                }
                 publish(.event(event))
             }
             if let supervisorCheckpoint { await supervisorCheckpoint(.eventsEnded) }
@@ -453,6 +507,8 @@ public actor HermesConnection {
             let result = try await client.request(
                 "client.capabilities", params: .object(["server_requests": .bool(true)]),
                 timeout: Self.capabilitiesTimeout)
+            await client.setBackendCountsDeclines(
+                result["declines_not_shown"]?.boolValue == true)
             return Set(result["server_requests"]?.arrayValue?.compactMap(\.stringValue) ?? [])
         } catch is CancellationError {
             // stop() cancelled the supervisor; the caller sees it next.
