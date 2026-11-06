@@ -37,7 +37,7 @@ struct SessionAuthorityLiveTests {
     @Test(.enabled(if: base != nil))
     func fullConversationOverTheAuthority() async throws {
         let endpoint = ServerEndpoint(baseURL: URL(string: Self.base!)!)
-        let connection = HermesConnection(endpoint: endpoint, token: nil)
+        let connection = HermesConnection(endpoint: endpoint, token: nil, adoptsSessionAuthority: true)
         var updates = await connection.updates().makeAsyncIterator()
         await connection.start()
         #expect(await transportEventually(timeout: 15) { await connection.phase == .ready(isReconnect: false) })

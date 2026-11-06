@@ -63,6 +63,13 @@ public actor HermesConnection {
     public private(set) var phase: Phase = .stopped
     /// This app's contract-7 switch (see `ServerRequestPolicy`).
     public nonisolated let serverRequestPolicy: ServerRequestPolicy
+    /// Whether this connection speaks the v0.23 session-authority wire when a
+    /// socket's `gateway.ready` says `session_authority: true`. Off by
+    /// default, so every frame stays what 0.6.1 sent. Mercury Chat leaves it
+    /// off until it answers prompts on the canonical wire (`request.answer`,
+    /// `events.since` and `steer` are not translated); Mercury Voice's engine
+    /// host turns it on.
+    public nonisolated let adoptsSessionAuthority: Bool
     /// The server→client request methods the backend said it may send, from
     /// the current socket's `client.capabilities` reply. Nil while not
     /// ready, when the policy is disabled, or when the advertisement failed
@@ -112,12 +119,15 @@ public actor HermesConnection {
     /// `serverRequestPolicy` is the contract-7 switch: `.disabled` (the
     /// default) keeps contract-6 behaviour exactly; any other policy
     /// advertises `client.capabilities` on every socket and routes the
-    /// requests it names (see `ServerRequestPolicy`).
+    /// requests it names (see `ServerRequestPolicy`). `adoptsSessionAuthority`
+    /// opts into the v0.23 session-authority wire (see its property doc).
     public init(endpoint: ServerEndpoint, authenticator: HermesAuthenticator,
                 reconnectPolicy: ReconnectPolicy = .chat,
-                serverRequestPolicy: ServerRequestPolicy = .disabled) {
+                serverRequestPolicy: ServerRequestPolicy = .disabled,
+                adoptsSessionAuthority: Bool = false) {
         self.init(endpoint: endpoint, authenticator: authenticator,
                   reconnectPolicy: reconnectPolicy, serverRequestPolicy: serverRequestPolicy,
+                  adoptsSessionAuthority: adoptsSessionAuthority,
                   supervisorCheckpoint: nil)
     }
 
@@ -126,6 +136,7 @@ public actor HermesConnection {
     init(endpoint: ServerEndpoint, authenticator: HermesAuthenticator,
          reconnectPolicy: ReconnectPolicy = .chat,
          serverRequestPolicy: ServerRequestPolicy = .disabled,
+         adoptsSessionAuthority: Bool = false,
          supervisorCheckpoint: (@Sendable (SupervisorCheckpoint) async -> Void)?,
          backoffDelay: TimeInterval? = nil,
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
@@ -135,6 +146,7 @@ public actor HermesConnection {
         self.backoffDelay = backoffDelay
         self.reconnectPolicy = reconnectPolicy
         self.serverRequestPolicy = serverRequestPolicy
+        self.adoptsSessionAuthority = adoptsSessionAuthority
         self.now = now
         self.sleeper = sleeper
         self.makeClient = makeClient ?? {
@@ -157,12 +169,14 @@ public actor HermesConnection {
     }
 
     public init(endpoint: ServerEndpoint, token: String?, reconnectPolicy: ReconnectPolicy = .chat,
-                serverRequestPolicy: ServerRequestPolicy = .disabled) {
+                serverRequestPolicy: ServerRequestPolicy = .disabled,
+                adoptsSessionAuthority: Bool = false) {
         self.init(endpoint: endpoint,
                   authenticator: HermesAuthenticator(endpoint: endpoint,
                       credentials: token.map { .sessionToken($0) }),
                   reconnectPolicy: reconnectPolicy,
-                  serverRequestPolicy: serverRequestPolicy)
+                  serverRequestPolicy: serverRequestPolicy,
+                  adoptsSessionAuthority: adoptsSessionAuthority)
     }
 
     // MARK: Subscriptions
@@ -405,8 +419,9 @@ public actor HermesConnection {
                 }
                 gateway = client
                 sendsVoiceTurn = true
-                speaksSessionAuthority = authority
+                speaksSessionAuthority = adoptsSessionAuthority && authority
                 authoritySubscriptions = [:]
+                executionGenerations = [:]
                 serverRequestMethods = methods
                 failedDials = 0
                 failingSince = nil
@@ -416,8 +431,9 @@ public actor HermesConnection {
             } else {
                 gateway = client
                 sendsVoiceTurn = true
-                speaksSessionAuthority = authority
+                speaksSessionAuthority = adoptsSessionAuthority && authority
                 authoritySubscriptions = [:]
+                executionGenerations = [:]
                 failedDials = 0
                 failingSince = nil
                 attempt = 0

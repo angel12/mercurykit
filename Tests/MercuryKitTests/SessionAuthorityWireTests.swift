@@ -20,6 +20,7 @@ struct SessionAuthorityWireTests {
 
     private func connect(
         authority: Bool,
+        adopts: Bool = true,
         answer: @escaping @Sendable (String) -> String = { _ in "{}" }
     ) async throws -> (TransportUnionLoopbackGatewayServer, HermesConnection) {
         let server = try await TransportUnionLoopbackGatewayServer.start(
@@ -33,7 +34,7 @@ struct SessionAuthorityWireTests {
                 return #"{"jsonrpc":"2.0","id":\#(frame["id"]?.intValue ?? 0),"result":\#(answer(method))}"#
             })
         let endpoint = ServerEndpoint(baseURL: URL(string: "http://127.0.0.1:\(server.port)")!)
-        let connection = HermesConnection(endpoint: endpoint, token: nil)
+        let connection = HermesConnection(endpoint: endpoint, token: nil, adoptsSessionAuthority: adopts)
         await connection.start()
         #expect(await transportEventually { await connection.phase == .ready(isReconnect: false) })
         return (server, connection)
@@ -99,6 +100,35 @@ struct SessionAuthorityWireTests {
         #expect(keys(params(server, "session.interrupt").first) == ["session_id"])
         #expect(keys(params(server, "approval.respond").first) == ["session_id", "choice", "request_id"])
         #expect(keys(params(server, "clarify.respond").first) == ["request_id", "answer"])
+        #expect(params(server, "session.close").count == 1)
+        #expect(params(server, "session.detach").isEmpty)
+        await connection.stop()
+    }
+
+    /// The wire is opt-in: a socket that says `session_authority: true` but a
+    /// connection that did not adopt it still sends the 0.6.1 shapes.
+    @Test func authoritySocketWithoutOptInKeepsTheLegacyShapes() async throws {
+        let (server, connection) = try await connect(authority: true, adopts: false) { method in
+            switch method {
+            case "session.create": return #"{"session_id":"rt-1","stored_session_id":"s-1"}"#
+            case "session.close": return #"{"closed":true}"#
+            default: return #"{"status":"streaming"}"#
+            }
+        }
+        defer { server.stop() }
+        #expect(await connection.adoptsSessionAuthority == false)
+        #expect(await connection.speaksSessionAuthority == false)
+
+        _ = try await connection.createSession(cwd: "/tmp/w")
+        try await connection.submitPrompt(sessionID: "rt-1", text: "hi")
+        try await connection.interruptSession(sessionID: "rt-1")
+        #expect(await connection.closeSession(sessionID: "rt-1") == .closed)
+
+        let create = try #require(params(server, "session.create").first)
+        #expect(create["cols"]?.intValue == 96)
+        #expect(create["source"]?.stringValue == "desktop")
+        #expect(params(server, "prompt.submit").first?["submission_id"] == nil)
+        #expect(keys(params(server, "session.interrupt").first) == ["session_id"])
         #expect(params(server, "session.close").count == 1)
         #expect(params(server, "session.detach").isEmpty)
         await connection.stop()

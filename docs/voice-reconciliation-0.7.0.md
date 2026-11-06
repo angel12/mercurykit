@@ -6,7 +6,7 @@ Voice range: `b403c5e..b0be0c1` (angel12/mercury-voice), paths
 
 | Voice commit | Subject | Disposition | Kit task |
 |---|---|---|---|
-| `b0be0c1` | session-authority wire | ported | Task 6 |
+| `b0be0c1` | session-authority wire | ported, opt-in (`adoptsSessionAuthority`) | Task 6 |
 | `20251d1` | transcribe-stream | ported (`transcribeStreamURL`, `sttStreaming`) | Task 2 |
 | `c3b8548` | `voice_turn` on `prompt.submit` | ported, opt-in (`voiceTurn:`) | Task 4 |
 | `3738964` | xAI direct STT format/model | ported (`VoiceClientConfig`) | Task 2 |
