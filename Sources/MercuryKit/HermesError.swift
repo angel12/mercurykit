@@ -104,6 +104,14 @@ public enum HermesError: Error, LocalizedError, Sendable {
         public static let sessionNotOwned = "SESSION_NOT_OWNED"
         public static let maxConcurrentSessions = "MAX_CONCURRENT_SESSIONS"
         public static let coordinationUnavailable = "SESSION_COORDINATION_UNAVAILABLE"
+        /// The gateway that owns this chat is running a turn and could not
+        /// queue the prompt (an attachment or rewind can't join its queue).
+        /// Nothing was sent: offer to send again when the turn ends.
+        public static let sessionOwnerBusy = "SESSION_OWNER_BUSY"
+        /// The owning gateway didn't confirm the forwarded prompt in time. It
+        /// may already be queued, so never offer Retry: a second copy would
+        /// run. Tell the user to check the chat first.
+        public static let sessionOwnerUnconfirmed = "SESSION_OWNER_UNCONFIRMED"
     }
 
     /// The `data.reason` of an `.rpcError`, when the server attached one.
