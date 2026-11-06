@@ -37,6 +37,8 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
     /// connection test against a policy that advertises never waits out the
     /// supervisor's 5 s capabilities timeout.
     private let autoAnswersCapabilities: Bool
+    /// The `result` object of the `client.capabilities` reply.
+    private let capabilitiesResult: String
     private var peers: [ObjectIdentifier: Peer] = [:]
     private var _upgradeAttempts = 0
     private var _receivedFrames: [JSONValue] = []
@@ -67,7 +69,8 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         onOpen: @escaping @Sendable (TransportUnionLoopbackGatewayServer) -> Void = { server in
             server.sendEvent(type: "gateway.ready")
         },
-        onRequest: (@Sendable (JSONValue) -> String?)? = nil
+        onRequest: (@Sendable (JSONValue) -> String?)? = nil,
+        capabilitiesResult: String = #"{"server_requests":["approval","clarify","sudo","secret"]}"#
     ) async throws -> TransportUnionLoopbackGatewayServer {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
@@ -76,7 +79,8 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         let server = TransportUnionLoopbackGatewayServer(
             listener: listener, refuseUpgradeWith: refuseUpgradeWith,
             dropsUpgrade: dropsUpgrade, autoAnswersCapabilities: autoAnswersCapabilities,
-            onOpen: onOpen, onRequest: onRequest)
+            onOpen: onOpen, onRequest: onRequest,
+            capabilitiesResult: capabilitiesResult)
         try await server.waitUntilReady()
         return server
     }
@@ -87,8 +91,10 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         dropsUpgrade: Bool,
         autoAnswersCapabilities: Bool,
         onOpen: @escaping @Sendable (TransportUnionLoopbackGatewayServer) -> Void,
-        onRequest: (@Sendable (JSONValue) -> String?)?
+        onRequest: (@Sendable (JSONValue) -> String?)?,
+        capabilitiesResult: String
     ) {
+        self.capabilitiesResult = capabilitiesResult
         self.listener = listener
         self.onRequest = onRequest
         self.refuseUpgradeWith = refuseUpgradeWith
@@ -279,7 +285,7 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         let text =
             asError
             ? #"{"jsonrpc":"2.0","id":\#(id),"error":{"code":-32601,"message":"unknown method: client.capabilities"}}"#
-            : #"{"jsonrpc":"2.0","id":\#(id),"result":{"server_requests":["approval","clarify","sudo","secret"]}}"#
+            : #"{"jsonrpc":"2.0","id":\#(id),"result":\#(capabilitiesResult)}"#
         sendFrame(opcode: 0x1, payload: Data(text.utf8), to: connection)
     }
 

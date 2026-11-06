@@ -459,6 +459,8 @@ public actor HermesConnection {
             let result = try await client.request(
                 "client.capabilities", params: .object(["server_requests": .bool(true)]),
                 timeout: Self.capabilitiesTimeout)
+            await client.setBackendCountsDeclines(
+                result["declines_not_shown"]?.boolValue == true)
             return Set(result["server_requests"]?.arrayValue?.compactMap(\.stringValue) ?? [])
         } catch is CancellationError {
             // stop() cancelled the supervisor; the caller sees it next.

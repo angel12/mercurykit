@@ -5,6 +5,7 @@ import os
 public protocol GatewayDialing: Actor {
     var state: GatewayClient.State { get }
     var replayEpoch: String? { get }
+    func setBackendCountsDeclines(_ counts: Bool)
     var closeCause: GatewayClient.CloseCause { get }
     func connect(timeout: TimeInterval) async throws
     func request(_ method: String, params: JSONValue?, timeout: TimeInterval) async throws -> JSONValue
@@ -17,6 +18,7 @@ public protocol GatewayDialing: Actor {
 public extension GatewayDialing {
     var replayEpoch: String? { nil }
     var closeCause: GatewayClient.CloseCause { .other }
+    func setBackendCountsDeclines(_ counts: Bool) {}
 }
 
 
@@ -99,6 +101,23 @@ public actor GatewayClient: GatewayDialing {
     public private(set) var closeCause: CloseCause = .other
     /// `replay_epoch` from this socket's `gateway.ready` (nil on old backends).
     public private(set) var replayEpoch: String?
+
+    /// This socket's backend counts a 4404 as one client abstaining rather
+    /// than as the answer (`client.capabilities` → `declines_not_shown`,
+    /// upstream e33f1a0faf). Only then is a window-owned bridge declined.
+    public private(set) var backendCountsDeclines = false
+
+    /// Desktop GUI bridges answered only by a window showing the session.
+    /// Neither Mercury app has such a window.
+    static let windowOwnedMethods: Set<String> = [
+        "preview.read", "preview.act", "terminal.read", "window.read", "tour",
+    ]
+    /// `tui_gateway/server_requests.py::NOT_SHOWN_CODE`.
+    static let notShownCode = 4404
+
+    public func setBackendCountsDeclines(_ counts: Bool) {
+        backendCountsDeclines = counts
+    }
     private var readyWaiters: [CheckedContinuation<Void, Error>] = []
 
     /// Request-lifecycle probes for tests: whatever ends a request — reply,
@@ -529,6 +548,17 @@ public actor GatewayClient: GatewayDialing {
         // Not answerable by this app. Any response settles the request for
         // every attached client, so only `.refuse` (an app that is sure it
         // is alone) replies; see `ServerRequestPolicy.Unanswerable`.
+        if backendCountsDeclines, Self.windowOwnedMethods.contains(request.method) {
+            // A window-owned bridge against a backend that counts declines:
+            // abstain at once. The request stays open for a desktop window
+            // showing the session and settles with a refusal only once every
+            // attached client declined, so the agent is told now instead of
+            // after its deadline.
+            replyError(
+                to: request, code: Self.notShownCode,
+                message: "This client has no window that shows this session.")
+            return
+        }
         switch serverRequestPolicy.unanswerable {
         case .leaveForOtherClients:
             Self.logger.debug(
