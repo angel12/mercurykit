@@ -1,4 +1,4 @@
-# Mercury Voice → MercuryKit reconciliation for 0.7.0
+# Mercury Voice → MercuryKit reconciliation for 0.8.0
 
 Voice range: `b403c5e..b0be0c1` (angel12/mercury-voice), paths
 `Packages/MercuryVoiceCore/Sources/HermesKit`. Previous reconciliation:

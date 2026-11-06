@@ -4,6 +4,23 @@ import os
 /// Outcome of `session.close`. The server replies `{"closed": true}` when the
 /// runtime session actually shut down; anything else means it may still be
 /// holding resources (sockets, profile DB handles) on the backend.
+/// `prompt.submit`'s receipt.
+public struct PromptSubmission: Sendable, Equatable {
+    /// `streaming`, `queued`, `redirected` or `steered`; nil from older backends.
+    public var status: String?
+    /// The owner's admission id for a queued prompt.
+    public var admissionID: String?
+    /// True when the prompt joined the queue of the gateway that owns this
+    /// session rather than running here.
+    public var forwarded: Bool
+
+    public init(status: String?, admissionID: String? = nil, forwarded: Bool = false) {
+        self.status = status
+        self.admissionID = admissionID
+        self.forwarded = forwarded
+    }
+}
+
 public enum SessionCloseOutcome: Sendable, Equatable {
     /// Server confirmed `closed: true`.
     case closed
@@ -212,6 +229,22 @@ extension HermesConnection {
     public func submitPrompt(
         sessionID: String, text: String, interrupted: Bool = false, voiceTurn: Bool = false
     ) async throws -> String? {
+        try await submit(
+            sessionID: sessionID, text: text, interrupted: interrupted, voiceTurn: voiceTurn
+        ).status
+    }
+
+    /// `submitPrompt` with the whole receipt. Since v0.22.0 one gateway owns
+    /// each session: when it is already running a turn in this chat (a bot,
+    /// cron, the CLI or Desktop), the server queues the prompt in that
+    /// owner's FIFO and answers `forwarded: true`. It runs once, after the
+    /// current turn. A refusal comes back as a 4090 whose `rpcReason` is
+    /// `RefusalReason.sessionOwnerBusy` or `.sessionOwnerUnconfirmed`. On a
+    /// session authority every admission carries an `admission_id` and is
+    /// never `forwarded`: the socket already talks to the owner.
+    public func submit(
+        sessionID: String, text: String, interrupted: Bool = false, voiceTurn: Bool = false
+    ) async throws -> PromptSubmission {
         var params: [String: JSONValue] = [
             "session_id": .string(sessionID),
             "text": .string(text),
@@ -229,21 +262,28 @@ extension HermesConnection {
             if let generation = receipt["execution_generation"]?.intValue {
                 noteExecutionGeneration(generation, for: sessionID)
             }
-            return receipt["status"]?.stringValue
+            return Self.promptSubmission(receipt)
         }
         if voiceTurn && sendsVoiceTurn { params["voice_turn"] = .bool(true) }
         // Desktop uses a 30-minute timeout here.
         do {
             let result = try await request("prompt.submit", params: .object(params), timeout: 1800)
-            return result["status"]?.stringValue
+            return Self.promptSubmission(result)
         } catch HermesError.rpcError(4000, let message, _)
             where params["voice_turn"] != nil && message.contains("voice_turn")
         {
             sendsVoiceTurn = false
             params["voice_turn"] = nil
             let result = try await request("prompt.submit", params: .object(params), timeout: 1800)
-            return result["status"]?.stringValue
+            return Self.promptSubmission(result)
         }
+    }
+
+    private static func promptSubmission(_ result: JSONValue) -> PromptSubmission {
+        PromptSubmission(
+            status: result["status"]?.stringValue,
+            admissionID: result["admission_id"]?.stringValue,
+            forwarded: result["forwarded"]?.boolValue ?? false)
     }
 
     // MARK: Attachments

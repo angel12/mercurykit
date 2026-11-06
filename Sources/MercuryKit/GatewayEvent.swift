@@ -106,6 +106,8 @@ public struct GatewayEvent: Sendable, Equatable {
         /// One target transition or the settlement of an open connection
         /// operation (full snapshot plus `owner`).
         public static let connectionUpdate = "connection.update"
+        /// A `/btw` side question was answered: `{task_id, text, question}`.
+        public static let btwComplete = "btw.complete"
     }
 
     /// `status.update` kinds with a defined meaning (open set).
