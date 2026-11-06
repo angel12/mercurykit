@@ -216,6 +216,26 @@ struct UnionPendingPromptDecodingTests {
         #expect(clarify.lockedAnswers == ["q1": "dev"])
     }
 
+    /// Issue #144 item 1 (upstream 5eea87882a): `clarify.lock` keeps a null
+    /// answer as a skip, and a replay reports it as `null`. Dropping it made
+    /// the question look open, so this app asked it again; it decodes as ""
+    /// instead, which the server also reads as skipped.
+    @Test func clarifyKeepsASkippedLockAsEmpty() throws {
+        let request = ServerRequest(
+            id: "srq-333333333333", method: "clarify",
+            params: try json(
+                """
+                {"session_id": "s1",
+                 "questions": [
+                   {"qid": "q0", "question": "Which env?"},
+                   {"qid": "q1", "question": "Which branch?"}
+                 ],
+                 "answers": {"q0": null, "q1": "main"}}
+                """))
+        let clarify = try #require(ClarifyRequest(serverRequest: request))
+        #expect(clarify.lockedAnswers == ["q0": "", "q1": "main"])
+    }
+
     /// `null` is how the contract's optional fields read when unset.
     @Test func clarifyTreatsNullOptionalFieldsAsAbsent() throws {
         let clarify = try #require(

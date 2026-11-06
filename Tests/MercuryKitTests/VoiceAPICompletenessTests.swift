@@ -49,4 +49,9 @@ struct VoiceAPICompletenessTests {
         #expect(server.requests.map(\.method) == ["GET"])
         #expect(server.requests.map(\.path) == [profile == nil ? "/api/audio/voice-config" : "/api/audio/voice-config?profile=work"])
     }
+
+    @Test func voiceCatchUpNamesArePublic() {
+        #expect(GatewayEvent.Kind.approvalCancelled == "approval.cancelled")
+        #expect(HermesError.RPCCode.agentUnavailable == 5032)
+    }
 }
