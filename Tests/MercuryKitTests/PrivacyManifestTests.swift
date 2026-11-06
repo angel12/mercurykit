@@ -7,6 +7,8 @@ import Testing
 /// `ProcessInfo.systemUptime`, the default clock `HermesConnection` measures
 /// failure durations with — reason 35F9.1, elapsed time between in-app
 /// events. Add a category here when the kit starts using another listed API.
+/// MercuryVoiceEngine ships its own manifest for its `UserDefaults`
+/// preferences (CA92.1).
 @Suite("Privacy manifest")
 struct PrivacyManifestTests {
     private final class Marker {}
@@ -53,5 +55,39 @@ struct PrivacyManifestTests {
             candidates.first { FileManager.default.fileExists(atPath: $0.path) },
             "no PrivacyInfo.xcprivacy in the MercuryKit resource bundle under \(products.path)")
         #expect(try Self.plist(at: shipped) as NSDictionary == Self.plist(at: Self.sourceManifest) as NSDictionary)
+    }
+
+    // MARK: MercuryVoiceEngine
+
+    private static let engineManifest = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "Sources/MercuryVoiceEngine/PrivacyInfo.xcprivacy")
+
+    @Test func engineDeclaresUserDefaultsForOwnPreferencesOnly() throws {
+        let manifest = try Self.plist(at: Self.engineManifest)
+        let accessed = try #require(manifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]])
+        let declared = Dictionary(
+            uniqueKeysWithValues: accessed.map {
+                ($0["NSPrivacyAccessedAPIType"] as? String ?? "",
+                 $0["NSPrivacyAccessedAPITypeReasons"] as? [String] ?? [])
+            })
+        #expect(declared == ["NSPrivacyAccessedAPICategoryUserDefaults": ["CA92.1"]])
+        #expect(manifest["NSPrivacyTracking"] as? Bool == false)
+        #expect((manifest["NSPrivacyTrackingDomains"] as? [String])?.isEmpty == true)
+        #expect((manifest["NSPrivacyCollectedDataTypes"] as? [Any])?.isEmpty == true)
+    }
+
+    @Test func engineManifestShipsInItsResourceBundle() throws {
+        let products = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent()
+        let candidates = [
+            products.appending(path: "MercuryKit_MercuryVoiceEngine.bundle/PrivacyInfo.xcprivacy"),
+            products.appending(path: "MercuryKit_MercuryVoiceEngine.bundle/Contents/Resources/PrivacyInfo.xcprivacy"),
+        ]
+        let shipped = try #require(
+            candidates.first { FileManager.default.fileExists(atPath: $0.path) },
+            "no PrivacyInfo.xcprivacy in the MercuryVoiceEngine resource bundle under \(products.path)")
+        #expect(try Self.plist(at: shipped) as NSDictionary == Self.plist(at: Self.engineManifest) as NSDictionary)
     }
 }

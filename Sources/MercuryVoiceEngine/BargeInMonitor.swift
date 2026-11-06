@@ -1,0 +1,253 @@
+import Foundation
+
+/// iOS hardware-mute must release the barge monitor's capture consumer so
+/// `AudioCaptureService` can stop the engine (and the privacy indicator).
+/// macOS keeps the voice-processing input attached during playback — stopping
+/// it mid-TTS kills output.
+func shouldDetachBargeCaptureWhileMuted(isIOS: Bool) -> Bool {
+    isIOS
+}
+
+#if os(iOS)
+    let bargeMuteRunsOnIOS = true
+#else
+    let bargeMuteRunsOnIOS = false
+#endif
+
+/// Sync-readable capture state, so `isCapturing` can be answered without
+/// hopping onto the monitor's actor (issue #87).
+final class BargeCaptureFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var capturing = false
+
+    var isCapturing: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturing
+    }
+
+    func set(_ newValue: Bool) {
+        lock.lock()
+        capturing = newValue
+        lock.unlock()
+    }
+}
+
+/// Full-duplex interrupt monitor: watches the mic during thinking/speaking,
+/// trips on sustained speech, and captures the interrupting utterance with
+/// pre-roll so the first syllable survives.
+public actor BargeInMonitor: BargeMonitoring {
+    private let capture: any AudioCaptureStreaming
+    /// Testable hook: when true, `setSuspended(true)` closes the capture
+    /// stream instead of only discarding samples (issue #40).
+    let detachCaptureOnSuspend: Bool
+    /// Test-only: quiet-phase pre-roll after each bound, so a test can
+    /// observe an oversized append before a later hop repairs a skipped trim.
+    private let onQuietPreRoll: (@Sendable ([Float]) -> Void)?
+    /// Test-only: pins the endpoint silence instead of re-reading the
+    /// user's preference, so a test's timeline is not a function of a
+    /// process-wide default other suites can be writing.
+    private let utteranceSilence: Duration?
+
+    private var streamID: UUID?
+    private var pump: Task<Void, Never>?
+    private var suspended = false
+    private let captureFlag = BargeCaptureFlag()
+
+    /// See `BargeMonitoring.isCapturing`. Set before `onSpeech` fires and
+    /// cleared before any delivery or teardown, so the engine never sees a
+    /// capture that is not really in flight.
+    public nonisolated var isCapturing: Bool { captureFlag.isCapturing }
+
+    public init(capture: AudioCaptureService = .shared) {
+        self.capture = capture
+        self.detachCaptureOnSuspend = shouldDetachBargeCaptureWhileMuted(
+            isIOS: bargeMuteRunsOnIOS)
+        self.onQuietPreRoll = nil
+        self.utteranceSilence = nil
+    }
+
+    init(
+        capture: any AudioCaptureStreaming,
+        detachCaptureOnSuspend: Bool,
+        utteranceSilence: Duration? = nil,
+        onQuietPreRoll: (@Sendable ([Float]) -> Void)? = nil
+    ) {
+        self.capture = capture
+        self.detachCaptureOnSuspend = detachCaptureOnSuspend
+        self.utteranceSilence = utteranceSilence
+        self.onQuietPreRoll = onQuietPreRoll
+    }
+
+    public func start(
+        isPlaying: @escaping @Sendable () async -> Bool,
+        onSpeech: @escaping @Sendable () -> Void,
+        onUtterance: @escaping @Sendable (RecordedUtterance?) -> Void
+    ) async throws {
+        await stop()
+        suspended = false
+
+        let (id, stream) = try capture.openStream()
+        streamID = id
+        pump = Task {
+            await self.run(
+                streamID: id, stream: stream, isPlaying: isPlaying, onSpeech: onSpeech,
+                onUtterance: onUtterance)
+        }
+    }
+
+    public func stop() async {
+        detach()
+    }
+
+    public func setSuspended(_ newValue: Bool) {
+        suspended = newValue
+        // Deaf means anything half-captured is void — the pump discards it on
+        // its next chunk, and the engine must not be told a capture is still
+        // in flight in the meantime.
+        if newValue { captureFlag.set(false) }
+        if newValue, detachCaptureOnSuspend {
+            // iOS: release the consumer so the capture engine can stop.
+            // macOS keeps the stream and only discards samples below.
+            detach()
+        }
+    }
+
+    /// Re-read per run so a preference change applies from the next turn,
+    /// unless a test pinned one.
+    private var endpointSilence: Duration {
+        utteranceSilence ?? TurnSilencePreference.duration
+    }
+
+    private func detach() {
+        captureFlag.set(false)
+        if let id = streamID {
+            streamID = nil
+            capture.closeStream(id)
+        }
+        pump?.cancel()
+        pump = nil
+    }
+
+    /// `id` is the stream this run was born with: the pump keeps it so it can
+    /// tell, after a suspension, whether it is still the live run.
+    private func run(
+        streamID id: UUID,
+        stream: AsyncStream<AudioChunk>,
+        isPlaying: @escaping @Sendable () async -> Bool,
+        onSpeech: @escaping @Sendable () -> Void,
+        onUtterance: @escaping @Sendable (RecordedUtterance?) -> Void
+    ) async {
+        var detector = BargeDetector(utteranceSilence: endpointSilence)
+        var preRoll: [Float] = []
+        var captured: [Float] = []
+        // Locks to the first chunk's rate; route-change chunks at other rates
+        // are resampled into it so the sample-count timeline stays monotonic
+        // and the capture buffer holds one format (issue #43).
+        var resampler = RateLockedResampler()
+        var elapsedSamples = 0
+        var tripped = false
+
+        // Drop the audio and any half-built capture so nothing heard while
+        // muted can ever trip or be delivered.
+        func discardHeardAudio() {
+            detector = BargeDetector(utteranceSilence: endpointSilence)
+            preRoll.removeAll()
+            captured.removeAll()
+            tripped = false
+            captureFlag.set(false)
+        }
+
+        for await chunk in stream {
+            if Task.isCancelled { return }
+            let samples = resampler.normalize(chunk)
+            let sampleRate = resampler.sampleRate
+            guard sampleRate > 0 else { continue }
+            if suspended {
+                // Deaf but attached.
+                discardHeardAudio()
+                elapsedSamples += samples.count
+                continue
+            }
+            let now = Duration.seconds(Double(elapsedSamples) / sampleRate)
+            elapsedSamples += samples.count
+
+            let playing = await isPlaying()
+            // `isPlaying` is the only suspension point inside the loop body,
+            // so Stop, a restart and mute all land here — after the checks at
+            // the top of the loop have already passed. Re-read them before
+            // anything observable happens: a run that is no longer the live
+            // one must neither fire callbacks nor tear down the stream that
+            // replaced it, and audio heard once muted must still be dropped.
+            guard !Task.isCancelled, streamID == id else { return }
+            if suspended {
+                discardHeardAudio()
+                continue
+            }
+            let level = AudioLevel.normalizedRMS(samples)
+            let verdict = detector.process(level: level, at: now, playing: playing)
+
+            switch verdict {
+            case .quiet:
+                preRoll.append(contentsOf: samples)
+                // Unconditional bound: adaptive echo can sit above the static
+                // 0.075 floor and still be classified quiet (issue #70), so a
+                // loudness-gated trim lets a long reply grow without limit.
+                // Keep the trailing quiet window plus a bounded onset
+                // allowance so the first syllable of a real interruption
+                // still survives.
+                let maxPreRoll = Int(
+                    (VoiceConstants.bargePreRollRestart
+                        + VoiceConstants.bargePreRollOnsetAllowance).asSeconds
+                        * sampleRate)
+                if preRoll.count > maxPreRoll {
+                    preRoll.removeFirst(preRoll.count - maxPreRoll)
+                }
+                onQuietPreRoll?(preRoll)
+
+            case .tripped:
+                tripped = true
+                // Before the callback: `onSpeech` only reaches the engine
+                // after an actor hop, and the capture below starts now.
+                captureFlag.set(true)
+                onSpeech()
+                captured = preRoll + samples
+                preRoll.removeAll()
+
+            case .capturing:
+                captured.append(contentsOf: samples)
+
+            case .captureEnded:
+                captured.append(contentsOf: samples)
+                // Clean up before delivering, like the reference — and that
+                // clears the capture flag, so the mic reads as the engine's
+                // again from the moment this utterance is handed over.
+                detach()
+                let utterance = RecordedUtterance(
+                    audio: WAVEncoder.encode(samples: captured, sampleRate: sampleRate),
+                    mimeType: WAVEncoder.mimeType,
+                    duration: .seconds(Double(captured.count) / sampleRate),
+                    heardSpeech: true)
+                onUtterance(utterance)
+                return
+            }
+        }
+
+        // Stream ended without an endpoint (external stop): if we had tripped
+        // deliver what we have, else vanish silently.
+        // Only a live run may clear the shared flag. A cancelled run got here
+        // through the `detach()` that cancelled it, which already cleared the
+        // flag, so whatever is set now belongs to the run that replaced this
+        // one — and the actor is free to run this tail after that replacement
+        // has tripped (measured under forced priority inversion, issue #87).
+        if !Task.isCancelled { captureFlag.set(false) }
+        if tripped, !captured.isEmpty, !Task.isCancelled, resampler.sampleRate > 0 {
+            let utterance = RecordedUtterance(
+                audio: WAVEncoder.encode(samples: captured, sampleRate: resampler.sampleRate),
+                mimeType: WAVEncoder.mimeType,
+                duration: .seconds(Double(captured.count) / resampler.sampleRate),
+                heardSpeech: true)
+            onUtterance(utterance)
+        }
+    }
+}
