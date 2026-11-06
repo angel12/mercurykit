@@ -141,6 +141,9 @@ extension HermesConnection {
         if let generation = result["execution_generation"]?.intValue {
             noteExecutionGeneration(generation, for: handle.runtimeID)
         }
+        if let revision = result["revision"]?.intValue {
+            noteRevision(revision, for: handle.runtimeID)
+        }
         return handle
     }
 
@@ -242,8 +245,13 @@ extension HermesConnection {
     /// `RefusalReason.sessionOwnerBusy` or `.sessionOwnerUnconfirmed`. On a
     /// session authority every admission carries an `admission_id` and is
     /// never `forwarded`: the socket already talks to the owner.
+    ///
+    /// `submissionID` is the authority's admission key: pass the same one when
+    /// retrying the same user send so the owner admits it once. Ignored on the
+    /// legacy wire; minted per call when nil.
     public func submit(
-        sessionID: String, text: String, interrupted: Bool = false, voiceTurn: Bool = false
+        sessionID: String, text: String, interrupted: Bool = false, voiceTurn: Bool = false,
+        submissionID: String? = nil
     ) async throws -> PromptSubmission {
         var params: [String: JSONValue] = [
             "session_id": .string(sessionID),
@@ -257,7 +265,8 @@ extension HermesConnection {
             let receipt = try await request(
                 "prompt.submit",
                 params: .object(
-                    AuthorityWire.submitParams(params, submissionID: UUID().uuidString)),
+                    AuthorityWire.submitParams(
+                        params, submissionID: submissionID ?? UUID().uuidString.lowercased())),
                 timeout: 1800)
             if let generation = receipt["execution_generation"]?.intValue {
                 noteExecutionGeneration(generation, for: sessionID)
@@ -476,7 +485,13 @@ extension HermesConnection {
     ///
     /// Returns nil when the backend predates the field. Throws only when the
     /// create itself fails (then there is nothing to clean up).
+    ///
+    /// Also nil on a session authority, without creating anything: there a
+    /// create is a durable `local-…` row (the probe would litter the session
+    /// list), its snapshot carries no `desktop_contract`, and an authority is
+    /// v0.23+, newer than any contract minimum a client checks.
     public func probeDesktopContract() async throws -> Int? {
+        if speaksSessionAuthority { return nil }
         let handle = try await createSession()
         let sessionID = handle.runtimeID
         let close = Task {
@@ -724,10 +739,38 @@ extension HermesConnection {
     /// text as the next `prompt.submit` or it's lost.
     @discardableResult
     public func steerSession(sessionID: String, text: String) async throws -> Bool {
-        let result = try await request(
-            "session.steer",
-            params: ["session_id": .string(sessionID), "text": .string(text)])
+        guard let result = try await correct("session.steer", sessionID: sessionID, text: text)
+        else { return false }
         return result["status"]?.stringValue == "queued"
+    }
+
+    /// Steer or redirect. On a session authority a correction with no turn
+    /// running answers `stale_generation` (the fence names a finished turn)
+    /// where the legacy wire says `rejected`: both mean nothing was stored,
+    /// so both read as nil here and the caller sends the text as a prompt.
+    private func correct(_ method: String, sessionID: String, text: String) async throws -> JSONValue? {
+        if speaksSessionAuthority, executionGenerations[sessionID] == nil { return nil }
+        do {
+            return try await request(method, params: try correctionParams(sessionID: sessionID, text: text))
+        } catch let error as HermesError
+            where speaksSessionAuthority && error.rpcReason == "stale_generation"
+        {
+            return nil
+        }
+    }
+
+    /// Steer and redirect params. A session authority fences both by the
+    /// running turn's `execution_generation`.
+    private func correctionParams(sessionID: String, text: String) throws -> JSONValue {
+        var params: [String: JSONValue] = ["session_id": .string(sessionID), "text": .string(text)]
+        if speaksSessionAuthority {
+            guard let generation = executionGenerations[sessionID] else {
+                throw HermesError.malformedResponse(
+                    "no execution_generation known for \(sessionID); cannot correct the turn")
+            }
+            params["execution_generation"] = .number(Double(generation))
+        }
+        return .object(params)
     }
 
     /// `session.redirect` — redirect the active model turn, preserving valid
@@ -737,9 +780,8 @@ extension HermesConnection {
     /// agent refused — is false.
     @discardableResult
     public func redirectSession(sessionID: String, text: String) async throws -> Bool {
-        let result = try await request(
-            "session.redirect",
-            params: ["session_id": .string(sessionID), "text": .string(text)])
+        guard let result = try await correct("session.redirect", sessionID: sessionID, text: text)
+        else { return false }
         let status = result["status"]?.stringValue
         return status == "redirected" || status == "queued"
     }
@@ -747,7 +789,18 @@ extension HermesConnection {
     /// `session.title` — set (or, with nil, fetch/settle) the session title.
     /// Returns the resolved title.
     @discardableResult
+    ///
+    /// A session authority serves no `session.title`: a rename is the
+    /// revision-fenced `session.mutate rename`, and a nil title (a read) is
+    /// not supported there.
     public func setSessionTitle(sessionID: String, title: String?) async throws -> String? {
+        if speaksSessionAuthority {
+            guard let title else { return nil }
+            let result = try await mutateSession(
+                sessionID: sessionID, operation: "rename", payload: ["title": .string(title)],
+                fenced: false)
+            return result["title"]?.stringValue ?? title
+        }
         var params: [String: JSONValue] = ["session_id": .string(sessionID)]
         if let title { params["title"] = .string(title) }
         let result = try await request("session.title", params: .object(params))

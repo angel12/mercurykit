@@ -578,6 +578,13 @@ extension HermesConnection {
     public func compressSession(
         sessionID: String, timeout: TimeInterval = 300
     ) async throws -> String {
+        if speaksSessionAuthority {
+            // No session.compress on an authority: compression is a mutation,
+            // fenced by revision and the session's execution generation.
+            let result = try await mutateSession(
+                sessionID: sessionID, operation: "compress", payload: [:], fenced: true)
+            return result["status"]?.stringValue ?? "compressed"
+        }
         let result = try await request(
             "session.compress",
             params: .object(["session_id": .string(sessionID)]),

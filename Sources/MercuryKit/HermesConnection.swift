@@ -97,6 +97,11 @@ public actor HermesConnection {
     /// (create/resume/submit results and event frames), which
     /// `session.interrupt` is fenced by.
     var executionGenerations: [String: Int] = [:]
+    /// Session authority: the newest `revision` seen per session (snapshots,
+    /// `session.info`, `session.updated` and mutate receipts), which
+    /// `session.mutate` must present as `expected_revision`. Turns bump it
+    /// without a `session.updated`, so `session.info` is the main source.
+    var sessionRevisions: [String: Int] = [:]
     private var reconnectPoke: CheckedContinuation<Void, Never>?
     private var backoffTimer: Task<Void, Never>?
     private var subscribers: [UUID: AsyncStream<Update>.Continuation] = [:]
@@ -296,6 +301,17 @@ public actor HermesConnection {
         executionGenerations[sessionID] = max(executionGenerations[sessionID] ?? generation, generation)
     }
 
+    /// Monotonic like generations: a replayed older `session.info` never
+    /// rewinds the revision a mutation must present.
+    func noteRevision(_ revision: Int, for sessionID: String) {
+        sessionRevisions[sessionID] = max(sessionRevisions[sessionID] ?? revision, revision)
+    }
+
+    /// Whether the current socket speaks the session-authority wire: it
+    /// landed on a v0.23+ gateway listener and this connection adopts it. The
+    /// shared queue (`QueuedPrompt`, `cancelQueued`, …) exists only then.
+    public var isSessionAuthority: Bool { speaksSessionAuthority }
+
     // MARK: Supervisor
 
     private func ownsSupervisor(_ lifetime: UUID) -> Bool {
@@ -422,6 +438,7 @@ public actor HermesConnection {
                 speaksSessionAuthority = adoptsSessionAuthority && authority
                 authoritySubscriptions = [:]
                 executionGenerations = [:]
+                sessionRevisions = [:]
                 serverRequestMethods = methods
                 failedDials = 0
                 failingSince = nil
@@ -434,6 +451,7 @@ public actor HermesConnection {
                 speaksSessionAuthority = adoptsSessionAuthority && authority
                 authoritySubscriptions = [:]
                 executionGenerations = [:]
+                sessionRevisions = [:]
                 failedDials = 0
                 failingSince = nil
                 attempt = 0
@@ -450,6 +468,16 @@ public actor HermesConnection {
                 if !ownsSupervisor(lifetime) { break }
                 if let sessionID = event.sessionID, let generation = event.executionGeneration {
                     noteExecutionGeneration(generation, for: sessionID)
+                }
+                if speaksSessionAuthority, let sessionID = event.sessionID,
+                    event.type == GatewayEvent.Kind.sessionInfo || event.type == "session.updated"
+                {
+                    if let revision = event.payload["revision"]?.intValue {
+                        noteRevision(revision, for: sessionID)
+                    }
+                    if let generation = event.payload["execution_generation"]?.intValue {
+                        noteExecutionGeneration(generation, for: sessionID)
+                    }
                 }
                 publish(.event(event))
             }
