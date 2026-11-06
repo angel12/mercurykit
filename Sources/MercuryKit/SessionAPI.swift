@@ -151,18 +151,34 @@ extension HermesConnection {
     /// or — when submitted mid-turn — `"queued"`, `"redirected"`, or
     /// `"steered"` per the server's busy-input policy. Nil when the result
     /// carries no status (older backends).
+    ///
+    /// `voiceTurn` marks a spoken turn: the backend runs it on the
+    /// `auxiliary.voice_chat` model with reasoning off by default (upstream
+    /// 6cc1efd8f9). Backends that predate the key reject it with 4000 before
+    /// the handler runs; the turn is retried once without it and the key
+    /// stays off for the rest of this gateway connection.
     @discardableResult
     public func submitPrompt(
-        sessionID: String, text: String, interrupted: Bool = false
+        sessionID: String, text: String, interrupted: Bool = false, voiceTurn: Bool = false
     ) async throws -> String? {
         var params: [String: JSONValue] = [
             "session_id": .string(sessionID),
             "text": .string(text),
         ]
         if interrupted { params["interrupted"] = .bool(true) }
+        if voiceTurn && sendsVoiceTurn { params["voice_turn"] = .bool(true) }
         // Desktop uses a 30-minute timeout here.
-        let result = try await request("prompt.submit", params: .object(params), timeout: 1800)
-        return result["status"]?.stringValue
+        do {
+            let result = try await request("prompt.submit", params: .object(params), timeout: 1800)
+            return result["status"]?.stringValue
+        } catch HermesError.rpcError(4000, let message, _)
+            where params["voice_turn"] != nil && message.contains("voice_turn")
+        {
+            sendsVoiceTurn = false
+            params["voice_turn"] = nil
+            let result = try await request("prompt.submit", params: .object(params), timeout: 1800)
+            return result["status"]?.stringValue
+        }
     }
 
     // MARK: Attachments

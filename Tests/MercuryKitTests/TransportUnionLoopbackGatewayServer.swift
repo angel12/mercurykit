@@ -27,6 +27,10 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
     /// like (no status code ever reaches the client).
     private let dropsUpgrade: Bool
     private let onOpen: @Sendable (TransportUnionLoopbackGatewayServer) -> Void
+    /// Scripted answers for any request other than `client.capabilities`:
+    /// given the decoded frame, return a complete JSON-RPC reply text to send
+    /// back on the socket it arrived on, or nil to leave it unanswered.
+    private let onRequest: (@Sendable (JSONValue) -> String?)?
     /// False holds back every `client.capabilities` reply until a test fires
     /// it with `answerCapabilities(asError:)`, to pin down its ordering
     /// against `.phase(.ready)`. True (the default) answers at once, so a
@@ -62,7 +66,8 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         autoAnswersCapabilities: Bool = true,
         onOpen: @escaping @Sendable (TransportUnionLoopbackGatewayServer) -> Void = { server in
             server.sendEvent(type: "gateway.ready")
-        }
+        },
+        onRequest: (@Sendable (JSONValue) -> String?)? = nil
     ) async throws -> TransportUnionLoopbackGatewayServer {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
@@ -71,7 +76,7 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         let server = TransportUnionLoopbackGatewayServer(
             listener: listener, refuseUpgradeWith: refuseUpgradeWith,
             dropsUpgrade: dropsUpgrade, autoAnswersCapabilities: autoAnswersCapabilities,
-            onOpen: onOpen)
+            onOpen: onOpen, onRequest: onRequest)
         try await server.waitUntilReady()
         return server
     }
@@ -81,9 +86,11 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
         refuseUpgradeWith: Int?,
         dropsUpgrade: Bool,
         autoAnswersCapabilities: Bool,
-        onOpen: @escaping @Sendable (TransportUnionLoopbackGatewayServer) -> Void
+        onOpen: @escaping @Sendable (TransportUnionLoopbackGatewayServer) -> Void,
+        onRequest: (@Sendable (JSONValue) -> String?)?
     ) {
         self.listener = listener
+        self.onRequest = onRequest
         self.refuseUpgradeWith = refuseUpgradeWith
         self.dropsUpgrade = dropsUpgrade
         self.autoAnswersCapabilities = autoAnswersCapabilities
@@ -245,6 +252,8 @@ final class TransportUnionLoopbackGatewayServer: @unchecked Sendable {
             }
             if let capabilitiesID, autoAnswersCapabilities {
                 reply(to: connection, id: capabilitiesID, asError: false)
+            } else if capabilitiesID == nil, let text = onRequest?(frame) {
+                sendFrame(opcode: 0x1, payload: Data(text.utf8), to: connection)
             }
         }
     }
