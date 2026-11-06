@@ -2,7 +2,7 @@
 
 Shared Swift protocol client for Mercury Chat and Mercury Voice, connecting to Hermes Agent.
 
-**Status:** latest release `0.6.0`, which adds per-device push session scopes (`PushSessionScope`, `PushPairing.claimSession`; see [Push](#push-mercury-push)) and a new `PushDevicesError.featureUnsupported` case; `0.5.1` maps a notification's `device_id` to its pairing (`PushPayload.deviceID`, `PushPairing.pairing(forDeviceID:)`); `0.5.0` adds protocol-only Mercury Push pairing (see [Push](#push-mercury-push)); `0.4.1` sends a new session's `cwd` as an explicit pick so a named profile's working directory doesn't replace it (parity with upstream `9a0a162536`). Mercury Chat uses `0.4.1` (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87, the privacy manifest in #115, the commentary projection in #141 and the explicit `cwd` in #142) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet.
+**Status:** latest release `0.7.0`, which adds the `MercuryVoiceEngine` product (Mercury Voice's audio and conversation engine on MercuryKit), the v0.23 session-authority wire (used only when `gateway.ready` says `session_authority: true`), `sttLease`/`transcribeStreamURL`, size-scaled audio timeouts, opt-in `voice_turn`, window-bridge declines and `AgentErrorCopy`; see `docs/voice-reconciliation-0.7.0.md`. `0.6.0`, which adds per-device push session scopes (`PushSessionScope`, `PushPairing.claimSession`; see [Push](#push-mercury-push)) and a new `PushDevicesError.featureUnsupported` case; `0.5.1` maps a notification's `device_id` to its pairing (`PushPayload.deviceID`, `PushPairing.pairing(forDeviceID:)`); `0.5.0` adds protocol-only Mercury Push pairing (see [Push](#push-mercury-push)); `0.4.1` sends a new session's `cwd` as an explicit pick so a named profile's working directory doesn't replace it (parity with upstream `9a0a162536`). Mercury Chat uses `0.4.1` (adopted in angel12/mercurychat#81, with contract 7 in #82, bot creation in #85, the profile editor in #87, the privacy manifest in #115, the commentary projection in #141 and the explicit `cwd` in #142) and has been checked live against a local backend; see angel12/mercurychat#27. Mercury Voice hasn't migrated yet; Mercury Chat adopts `MercuryVoiceEngine` for its Voice tab.
 
 ## Platforms
 
@@ -81,10 +81,21 @@ The kit implements the app side of [Mercury Push](https://github.com/angel12/mer
 - **Routing a tap to its server:** mercury-push stamps each delivery with `device_id` (angel12/mercury-push#3 or later, `dea1936`). `PushPayload.deviceID` → `PushPairing.pairing(forDeviceID:)` gives the `server` (`ServerEndpoint.key`) and `profile`. It is nil for notifications from older plugins.
 - **Session scope:** each paired device chooses `PushSessionScope.all` (every session in the profile, the default) or `.owned` (only sessions this device was the last to claim, plus cron broadcasts and test pushes). Set it with `HermesRESTClient.updatePushSessionScope` or `pair(…, sessionScope:)`. Session scopes need angel12/mercury-push#11 or later (`b167d79`, released as mercury-push `v0.2.0`); before that `PushDevice.sessionScope` is nil, so hide the setting. Older plugins silently ignore `pair(…, sessionScope:)`, so learn support from `syncPairing`: a non-nil `sessionScope` on the returned device means this plugin supports it. Claim with `PushPairing.claimSession(server:profile:sessionID:)` only once `syncPairing` has shown a non-nil `sessionScope` for this pairing; then claim when the user creates a session and when they send a message in one, whatever this device's own scope, so using a session elsewhere takes it over. Claims are best effort: log failures, don't show them. Re-pairing gives the device a new `device_id`, drops its claims, and resets its scope to `.all` unless you pass `sessionScope:`, so pass the user's current choice to `pair` and claim the active sessions again afterwards. Ownership follows Hermes compression continuations, so there is no need to re-claim when a long conversation is compressed. Against an older plugin, `updatePushSessionScope` throws `PushDevicesError.featureUnsupported` and `claimPushSession` throws `.pluginUnavailable`. The new error case makes this `0.6.0`.
 
+## Voice engine (`MercuryVoiceEngine`)
+
+A second library product: Mercury Voice's hands-free conversation engine
+(listen → transcribe → submit → speak → re-arm, barge-in, stop words,
+client-direct STT/TTS, live transcription) running on MercuryKit's
+`HermesRESTClient` and `GatewayEvent`. iOS 17, macOS 14 and visionOS 2; the
+audio session is configured on iOS and visionOS and is a no-op on macOS.
+The engine target ships its own `PrivacyInfo.xcprivacy` (UserDefaults, reason CA92.1) because the engine stores preferences in UserDefaults.
+It carries no UI and no session logic: the app owns the connection, the
+session, and the conversation controller.
+
 ## Source provenance
 
 - Mercury Chat: `f94bfafb9e6f90b8ff7fb12562a8216083433632` (angel12/mercurychat `main`; adds Bot Mode Phase 1 and 2 from PRs #78 and #79 over `44abd62bfe93c26e07c1d7e7ef2b9e1a6fd6865d`, which added `ToolCallRef` from issue #76 over the original `70633d3af7630cff96589a17adbea1f196ffc487` reconciliation)
-- Mercury Voice: `b403c5e19dbfbefdc8109ad403864413571d9c32` (angel12/mercury-voice `main`, PR #126 contract 7, over the original `3792ac146e0299c17295f928661b7339bb625510` reconciliation)
+- Mercury Voice: `b403c5e19dbfbefdc8109ad403864413571d9c32` (angel12/mercury-voice `main`, PR #126 contract 7, over the original `3792ac146e0299c17295f928661b7339bb625510` reconciliation), then `b0be0c1` (this release, the 0.7.0 voice-engine reconciliation, over `b403c5e`)
 - hermes-agent: checked against upstream `main` at `9a0a162536` (desktop contract 8): since `59004a6235` the only changes to contracts the kit uses are additive, and `session.create` now sends a `cwd` as an explicit pick (`cwd_explicit`), falling back for older backends. `59004a6235` added the commentary projection on history rows. Bot Mode parity was checked at `9fe737aef2` and the contract-7/8 parity work at `d3b25b52ad`.
 
 Consumer cutovers are separate changes after standalone verification. No migration exports or personal service credentials belong in this repository.
