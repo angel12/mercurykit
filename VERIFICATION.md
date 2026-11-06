@@ -2,6 +2,41 @@
 
 Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`), `0.6.0` (`01b2906`), `0.6.1` (`c243c32`) and `0.7.0` (`705fbee`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
+## Session profile routing (`claude/session-profile-routing`)
+
+Run on 2026-11-06 on macOS 26.7.1 (arm64), against hermes-agent v0.23.0 (`2bd378ed1b`, the installed backend), read from source.
+
+The bug: on a gateway's Webapp listener, every prompt in a non-default profile failed with `4001 permission_denied`. `hermes serve` was fine.
+
+The cause, in `gateway/session_controls.py`: `AuthorityConnection.dispatch` hands a frame to a sibling profile's authority only when `params.profile` names it (`_sibling_for`). Without `profile`, the socket's launch-profile authority answers with `SessionRef(launch_profile, session_id)` and refuses another profile's session. MercuryKit sent `profile` on create and resume only. Activate's resume on the authority sent none at all.
+
+The fix: `HermesConnection` remembers the profile each session was opened in (create/resume, by runtime id). Unlike the per-socket maps, this survives reconnects. On an authority socket, `request` stamps that profile on profile-scoped methods that don't already name one. The method list comes from the v0.23 registry, read with `tui_gateway.contracts.registry`:
+- `_PROFILE_IMPLICIT` verbs naming a session. Hermes strips `profile` before the closed canonical check, so this is safe even where the contract omits it (`prompt.cancel`, `prompt.receipt`, `prompt.resolve_unknown`, `session.mutate`, `session.detach`, `session.info`, `session.stats`, `clarify.respond`).
+- Canonical contracts declaring `profile`: `session.steer`, `session.redirect`, `config.set`, `config.get`, `image.attach_bytes`, `session.export`, `shell.exec`, `command.observe`, `rollback.session_diff`.
+- Non-canonical handlers whose legacy contract declares `profile`: `slash.exec`, `command.dispatch`, `complete.slash`, `prompt.btw`.
+
+Not stamped:
+- `request.answer`, `clarify.lock` and bare server-request responses. They name no session, and `_resolve_response` already resolves across sibling connections.
+- Anything sent on a legacy socket.
+
+### Verified
+
+- `swift test`: **MercuryKit 657 tests / 86 suites** (8 new in `SessionProfileRoutingTests`) and **MercuryVoiceEngine 338 / 49**, all passing. `check-api-constraints.py` passed.
+- The new tests cover these cases:
+  - A session created or resumed in a profile carries it on submit (both entry points), steer, redirect, cancel, steer_queued, receipt, events.since, mutate, approval and clarify responses, activate's resume, interrupt and detach.
+  - A session with no profile sends none.
+  - `default` is carried as opened.
+  - An explicit `profile` isn't overwritten.
+  - `request.answer` and unlisted methods are untouched.
+  - A legacy socket is unchanged.
+  - The profile survives a reconnect.
+- With stamping disabled, 4 of those tests fail.
+
+### Not run or pending
+
+- No live multi-profile gateway check. A host-scoped shared socket needs the Desktop or dashboard grant.
+- Not tagged.
+
 ## Event admission id (`claude/event-admission-id`)
 
 Run on 2026-11-06 on macOS 26.7.1 (arm64), against hermes-agent v0.23.0 (`2bd378ed1b`, the installed backend), read from source.
