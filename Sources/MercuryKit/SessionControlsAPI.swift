@@ -213,10 +213,24 @@ extension HermesConnection {
     /// Switch this session's model. `--session` keeps the profile default
     /// untouched, as Desktop does for a chat it isn't the primary tile of.
     /// Mid-turn, the server defers the switch to the next turn.
+    ///
+    /// A session authority refuses `config.set model`
+    /// (`use_session_mutation_model`): there the pick is `session.mutate
+    /// model {model, provider}`, fenced by revision and generation. Its
+    /// expensive-model guard is not surfaced as `confirmRequired` yet; a
+    /// refusal comes back as an error.
     public func setSessionModel(
         sessionID: String, model: String, provider: String, confirmExpensiveModel: Bool = false
     ) async throws -> ConfigSetResult {
-        try await setConfig(
+        if speaksSessionAuthority {
+            let result = try await mutateSession(
+                sessionID: sessionID, operation: "model",
+                payload: ["model": .string(model), "provider": .string(provider)], fenced: true)
+            var receipt = ConfigSetResult(result: result, key: "model")
+            receipt.value = result["model"]?.stringValue ?? model
+            return receipt
+        }
+        return try await setConfig(
             sessionID: sessionID, key: "model",
             value: .string("\(model) --provider \(provider) --session"),
             confirmExpensiveModel: confirmExpensiveModel)

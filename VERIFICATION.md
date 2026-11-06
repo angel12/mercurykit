@@ -2,6 +2,45 @@
 
 Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`), `0.6.0` (`01b2906`), `0.6.1` (`c243c32`) and `0.7.0` (`705fbee`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
+## Shared queue and canonical chat (`feat/canonical-chat`)
+
+Run on 2026-11-05 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a), against hermes-agent v0.23.0 (`2bd378ed1b`). This builds on 0.8.0's opt-in session-authority wire (#21) and closes what a chat client needs on a v0.23 gateway listener (the Webapp), where every `/api/ws` socket is canonical.
+
+First, every JSON-RPC method MercuryKit calls was sent in its legacy shape to a throwaway canonical gateway. Most were already served (`request.answer`, `clarify.lock`, `config.set` reasoning/yolo, `slash.exec`, `complete.slash`, `model.options`, `prompt.btw`, attachments, `session.events.since`). These were not, and are now translated when `speaksSessionAuthority`:
+- `session.title` and `session.compress`: `session.mutate rename {title}` / `compress {}`.
+- `config.set model`: answers `use_session_mutation_model`, so it becomes `session.mutate model {model, provider}`.
+- `session.steer` / `session.redirect`: gain `execution_generation`. An idle correction answers `stale_generation` there (the legacy wire says `rejected`); both read as "not taken".
+- `probeDesktopContract`: returns nil without creating anything, because an authority's create is a durable `local-…` row.
+
+What the release adds:
+- **`QueueAPI.swift`:**
+  - `QueuedPrompt` (from `session.info.pending` and snapshots) with `controls` (`steer`, `replace`) and status.
+  - `cancelQueued`, `replaceQueued`, `steerQueued`, `promptReceipt`, `resolveUnknown`.
+  - `respondClarifyPrompt` for clarifies raised as events.
+  - `HermesConnection.isSessionAuthority`.
+- **Mutations:** `mutateSession` presents the newest `revision` (now tracked from snapshots, `session.info`, `session.updated` and receipts, monotonic, reset on reconnect) and generation. It retries once with the fresh fences that a `revision_conflict` / `stale_generation` refusal carries.
+- **Submit:** `submit(…, submissionID:)` lets a caller reuse one admission key across retries; the owner admitted a resend once in the live check.
+
+### Verified
+
+- `swift test`: **MercuryKit 642 tests / 84 suites** (631 on `main`, 11 new in `AuthorityQueueTests`) and **MercuryVoiceEngine 338 / 49**, all passing. `check-api-constraints.py` passed.
+- Every new request shape was checked against the v0.23.0 canonical registry (`CANONICAL_METHODS`).
+- **Live, throwaway gateway** (`webapp.enabled` on loopback, a fresh `HERMES_HOME` with a `model:` block), with a probe built on this branch. Passed:
+  - translated create;
+  - two submits, with the same `submission_id` admitted once;
+  - `prompt.receipt`, `prompt.replace_queued` and `prompt.cancel` (`terminal/cancelled`);
+  - 11 `pending` snapshots decoded, with `controls` `["replace","steer"]`;
+  - rename and model through `session.mutate`;
+  - reasoning through `config.set`;
+  - idle steer and redirect reading as false;
+  - compress, a fenced interrupt, and detach.
+- **Event order observed** (a slow fake OpenAI-compatible model kept turns running): a cancelled queued admission's row leaves `pending` *before* its `message.complete {outcome: "cancelled"}` arrives. Clients must not assume the reverse.
+- **Upstream quirk:** renaming to a title another session already has fails with a generic `-32603` (a `ValueError` in `hermes_state_titles`), not a named refusal.
+
+### Not run or pending
+
+- Not tagged. Mercury Chat adopts this in a stacked PR.
+
 ## Session controls and slash commands (`feat/session-controls-slash`)
 
 Run on 2026-11-05 on macOS 26.7.1 (arm64), Swift 6.4 / Xcode 27.0 (27A266a), against hermes-agent v0.23.0 (`2bd378ed1b`, desktop contract 8). These are the per-chat controls Desktop drives over the same desktop-contract socket. Every method is a regular `methods` entry in `apps/shared/src/gateway-contract.openrpc.json`; none needs the canonical `hermes-gateway-v1` protocol, which a remote client can't reach.
