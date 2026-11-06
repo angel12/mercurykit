@@ -27,6 +27,9 @@ public enum HermesError: Error, LocalizedError, Sendable {
             // Refusal reasons are the machine contract (the prose is server
             // wording that will change); map the known ones to copy that is
             // safe to speak aloud — no pids, paths, or session ids.
+            // The 5032 `agentUnavailable` text below is the exception: it
+            // includes the server's reason, so it is display-only (spoken
+            // copy is `AgentErrorCopy.spokenSubmitFailure`).
             if let reason = rpcReason {
                 switch reason {
                 case RefusalReason.sessionNotOwned:

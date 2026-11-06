@@ -528,12 +528,12 @@ extension HermesConnection {
     ///
     /// On a BATCH clarify, calling this without a question id cancels the
     /// whole batch (server resolves every question with this one answer).
-    @available(*, deprecated, message: "Contract-6 only: a contract ≥ 7 backend removed clarify.respond and answers -32601. Use answerServerRequest(id:result:) with ServerRequestResult.clarify.")
     ///
     /// On a session authority: `{session_id, execution_generation,
     /// prompt_id, answer}`, the prompt id being `requestID`; pass the
     /// request's `sessionID` and `executionGeneration` (the session's newest
     /// is used when the generation is nil).
+    @available(*, deprecated, message: "Contract-6 only: a contract ≥ 7 backend removed clarify.respond and answers -32601. Use answerServerRequest(id:result:) with ServerRequestResult.clarify.")
     public func respondClarify(
         requestID: String, answer: String, sessionID: String? = nil,
         executionGeneration: Int? = nil

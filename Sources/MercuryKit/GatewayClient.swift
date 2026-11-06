@@ -554,9 +554,10 @@ public actor GatewayClient: GatewayDialing {
             for sub in subscribers.values { sub.yield(event) }
             return
         }
-        // Not answerable by this app. Any response settles the request for
-        // every attached client, so only `.refuse` (an app that is sure it
-        // is alone) replies; see `ServerRequestPolicy.Unanswerable`.
+        // Not answerable by this app. The one deliberate exception to "only
+        // `.refuse` replies" is this decline: a 4404 is counted as
+        // abstaining, not as the answer, so it cannot settle the request
+        // for another client.
         if backendCountsDeclines, Self.windowOwnedMethods.contains(request.method) {
             // A window-owned bridge against a backend that counts declines:
             // abstain at once. The request stays open for a desktop window
@@ -568,6 +569,9 @@ public actor GatewayClient: GatewayDialing {
                 message: "This client has no window that shows this session.")
             return
         }
+        // Any response settles the request for every attached client, so
+        // only `.refuse` (an app that is sure it is alone) replies; see
+        // `ServerRequestPolicy.Unanswerable`.
         switch serverRequestPolicy.unanswerable {
         case .leaveForOtherClients:
             Self.logger.debug(
