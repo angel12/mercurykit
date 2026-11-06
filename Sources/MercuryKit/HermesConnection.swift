@@ -105,6 +105,14 @@ public actor HermesConnection {
     /// `session.mutate` must present as `expected_revision`. Turns bump it
     /// without a `session.updated`, so `session.info` is the main source.
     var sessionRevisions: [String: Int] = [:]
+    /// The profile each session was opened in (create/resume), by runtime
+    /// id. A shared multi-profile authority socket (the Webapp listener)
+    /// routes a frame to a sibling profile only when its params name
+    /// `profile`; without it the launch profile's authority answers and
+    /// refuses another profile's session with 4001 `permission_denied`.
+    /// `request` stamps it (see `profileScopedMethods`). Unlike the maps
+    /// above it survives reconnects: a session's profile never changes.
+    var sessionProfiles: [String: String] = [:]
     private var reconnectPoke: CheckedContinuation<Void, Never>?
     private var backoffTimer: Task<Void, Never>?
     private var subscribers: [UUID: AsyncStream<Update>.Continuation] = [:]
@@ -259,7 +267,52 @@ public actor HermesConnection {
         // (and, while ready, would still put the frame on the wire).
         try Task.checkCancellation()
         guard let gateway, case .ready = phase else { throw HermesError.notConnected }
+        let params = speaksSessionAuthority ? stampingProfile(method, params) : params
         return try await gateway.request(method, params: params, timeout: timeout)
+    }
+
+    /// Session-scoped methods that may carry `profile` on a session
+    /// authority, from hermes v0.23 (`gateway/session_controls.py`):
+    /// - `_PROFILE_IMPLICIT`: the authority strips `profile` before the
+    ///   closed canonical contract check, so it is safe even where the
+    ///   contract itself doesn't declare it (`prompt.cancel`, `session.mutate`…).
+    /// - Canonical contracts that declare `profile`.
+    /// - Non-canonical handlers checked against legacy contracts that
+    ///   declare `profile`.
+    ///
+    /// Everything else keeps its params as given. `request.answer`,
+    /// `clarify.lock` and bare server-request responses name no session; the
+    /// authority resolves those across sibling profiles itself.
+    static let profileScopedMethods: Set<String> = [
+        // _PROFILE_IMPLICIT verbs that name a session
+        "session.info", "session.resume", "session.detach", "prompt.submit", "prompt.receipt",
+        "prompt.cancel", "prompt.resolve_unknown", "prompt.steer_queued", "prompt.replace_queued",
+        "session.interrupt", "session.events.since", "session.mutate", "session.stats",
+        "approval.respond", "clarify.respond",
+        // canonical contracts declaring profile
+        "session.steer", "session.redirect", "config.set", "config.get", "image.attach_bytes",
+        "session.export", "shell.exec", "command.observe", "rollback.session_diff",
+        // non-canonical, legacy contract declares profile
+        "slash.exec", "command.dispatch", "complete.slash", "prompt.btw",
+    ]
+
+    /// `params` with the session's remembered `profile` added, when `method`
+    /// is profile-scoped, names a session opened in a profile, and doesn't
+    /// already name one. Otherwise unchanged.
+    func stampingProfile(_ method: String, _ params: JSONValue?) -> JSONValue? {
+        guard Self.profileScopedMethods.contains(method),
+            case .object(var object)? = params, object["profile"] == nil,
+            let sessionID = object["session_id"]?.stringValue,
+            let profile = sessionProfiles[sessionID]
+        else { return params }
+        object["profile"] = .string(profile)
+        return .object(object)
+    }
+
+    /// Remember (or, for nil / empty, forget) the profile `sessionID` was
+    /// opened in.
+    func noteSessionProfile(_ profile: String?, for sessionID: String) {
+        sessionProfiles[sessionID] = profile.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// `replay_epoch` from the current socket's `gateway.ready`; nil while

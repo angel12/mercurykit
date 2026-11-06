@@ -107,7 +107,9 @@ extension HermesConnection {
         if speaksSessionAuthority {
             let result = try await request(
                 "session.create", params: .object(AuthorityWire.createParams(params)))
-            return try adoptAuthoritySnapshot(result, method: "session.create")
+            let handle = try adoptAuthoritySnapshot(result, method: "session.create")
+            noteSessionProfile(profile, for: handle.runtimeID)
+            return handle
         }
 
         let result: JSONValue
@@ -123,6 +125,7 @@ extension HermesConnection {
         guard let handle = SessionHandle(result: result) else {
             throw HermesError.malformedResponse("session.create returned no session_id")
         }
+        noteSessionProfile(profile, for: handle.runtimeID)
         return handle
     }
 
@@ -183,6 +186,7 @@ extension HermesConnection {
             ?? result["session_key"]?.stringValue
             ?? handle.storedID
             ?? storedID
+        noteSessionProfile(profile, for: handle.runtimeID)
         return handle
     }
 
