@@ -280,9 +280,11 @@ public actor HermesConnection {
     /// - Non-canonical handlers checked against legacy contracts that
     ///   declare `profile`.
     ///
-    /// Everything else keeps its params as given. `request.answer`,
-    /// `clarify.lock` and bare server-request responses name no session; the
-    /// authority resolves those across sibling profiles itself.
+    /// Everything else keeps its params as given. `request.answer` and bare
+    /// server-request responses name no session; the authority resolves those
+    /// across sibling profiles itself. `clarify.lock` names none either but
+    /// is NOT resolved across siblings, so `lockClarifyAnswer` stamps it
+    /// from the session its caller names.
     static let profileScopedMethods: Set<String> = [
         // _PROFILE_IMPLICIT verbs that name a session
         "session.info", "session.resume", "session.detach", "prompt.submit", "prompt.receipt",
@@ -294,6 +296,9 @@ public actor HermesConnection {
         "session.export", "shell.exec", "command.observe", "rollback.session_diff",
         // non-canonical, legacy contract declares profile
         "slash.exec", "command.dispatch", "complete.slash", "prompt.btw",
+        "file.attach", "model.options",
+        // ProfileParams; names its session as `owner.session_id` (contract 8)
+        "connection.respond",
     ]
 
     /// `params` with the session's remembered `profile` added, when `method`
@@ -302,7 +307,8 @@ public actor HermesConnection {
     func stampingProfile(_ method: String, _ params: JSONValue?) -> JSONValue? {
         guard Self.profileScopedMethods.contains(method),
             case .object(var object)? = params, object["profile"] == nil,
-            let sessionID = object["session_id"]?.stringValue,
+            let sessionID = object["session_id"]?.stringValue
+                ?? object["owner"]?["session_id"]?.stringValue,
             let profile = sessionProfiles[sessionID]
         else { return params }
         object["profile"] = .string(profile)

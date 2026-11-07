@@ -2,6 +2,33 @@
 
 Released as `0.1.0` (`58d303f`), `0.2.0` (`b165d20`), `0.3.0` (`478b021`), `0.3.1` (`4eda260`), `0.4.0` (`bd43e91`), `0.4.1` (`c49cfc8`), `0.5.0` (`21d6afa`), `0.5.1` (`5e81deb`), `0.6.0` (`01b2906`), `0.6.1` (`c243c32`) and `0.7.0` (`705fbee`). Mercury Chat adopted `0.1.0` in angel12/mercurychat#81 and #82, `0.2.0` in #85, `0.3.0` in #87, `0.3.1` in #115, `0.4.0` in #141 and `0.4.1` in #142, and its app-level and live checks are recorded there and in angel12/mercurychat#27. Mercury Voice hasn't migrated.
 
+## Profile routing gaps (`claude/profile-routing-gaps`)
+
+Run on 2026-11-06 on macOS 26.7.1 (arm64), against hermes-agent v0.23.0 (`2bd378ed1b`, the installed backend), live on a throwaway multiplex gateway: its own `HERMES_HOME` with a second profile `p2`, the Webapp listener on loopback, and a fake OpenAI-compatible model.
+
+0.10.1's routing left four session calls Mercury makes unrouted. Each was probed raw on a host-scoped `/api/ws` socket, with a `p2` session:
+- `file.attach` without `profile` → `4001 permission_denied`; with it, staged in `p2`'s `attachments/`. This broke attachments in every non-default profile.
+- `model.options {session_id}` without `profile` → `4001 not_found`; with it, the providers.
+- `connection.respond` names its session as `owner.session_id` (contract 8), which the stamp never read. Its handler (`gateway/session_connections.py`) looks the session up on the socket's own authority; its params are `ProfileParams`.
+- `clarify.lock` names no session on the wire, and unlike response frames it is NOT resolved across siblings: `may_settle` runs against the socket's own authority only. Its contract declares `profile` and refuses `session_id`.
+
+The fix:
+- `file.attach`, `model.options` and `connection.respond` join `profileScopedMethods`.
+- The stamp reads the session from `owner.session_id` when there is no top-level `session_id`.
+- `lockClarifyAnswer` takes an optional `sessionID` and, on an authority socket, sends that session's profile, never the id.
+
+### Verified
+
+- `swift test`: **MercuryKit 657 tests / 86 suites** and **MercuryVoiceEngine 338 / 49**, all passing. `SessionProfileRoutingTests` drives the four calls; before the fix, `file.attach`, `model.options` and `connection.respond` failed it. `check-api-constraints.py` passed.
+- Live, with a session-token dial on the Webapp listener (host-scoped, bound to the launch profile, like a signed-in `/api/auth/ws-ticket` dial): for `p2` and for `default`, create → `file.attach` → submit → receipt → `message.complete` → `model.options` → rename (`session.mutate`) → `clarify.lock` → `events.since` → second submit → interrupt → resume → activate all succeeded.
+- This also closes 0.10.1's open item: the live `p2` turn ran end to end. Before 0.10.1, the same raw probe got `permission_denied` on `prompt.submit`.
+
+### Not run or pending
+
+- `clarify.lock` live with a real batch clarify. The live call was accepted with `profile`, but an unknown request reads `expired` either way, so that doesn't prove the routing.
+- `connection.respond` live with a real connector operation.
+- The user's own gateway (8 profiles, signed-in Nous ticket).
+
 ## Session profile routing (`claude/session-profile-routing`)
 
 Run on 2026-11-06 on macOS 26.7.1 (arm64), against hermes-agent v0.23.0 (`2bd378ed1b`, the installed backend), read from source.
