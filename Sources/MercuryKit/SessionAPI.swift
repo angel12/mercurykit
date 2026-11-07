@@ -667,16 +667,23 @@ extension HermesConnection {
     /// Optional: one `answerServerRequest` with
     /// `ServerRequestResult.clarify(answers:)` also resolves the batch, and
     /// the backend merges any answers locked here into it.
+    ///
+    /// `sessionID` is the session the request belongs to. `clarify.lock`
+    /// names no session on the wire, so on a shared multi-profile authority
+    /// socket the session's profile is what routes it to the profile that
+    /// asked; without it a non-default profile's lock is refused.
     public func lockClarifyAnswer(
-        requestID: String, questionID: String, answer: String
+        requestID: String, questionID: String, answer: String, sessionID: String? = nil
     ) async throws -> [String]? {
-        let result = try await request(
-            "clarify.lock",
-            params: [
-                "request_id": .string(requestID),
-                "question_id": .string(questionID),
-                "answer": .string(answer),
-            ])
+        var params: [String: JSONValue] = [
+            "request_id": .string(requestID),
+            "question_id": .string(questionID),
+            "answer": .string(answer),
+        ]
+        if speaksSessionAuthority, let sessionID, let profile = sessionProfiles[sessionID] {
+            params["profile"] = .string(profile)
+        }
+        let result = try await request("clarify.lock", params: .object(params))
         if case .expired = try PromptResponseStatus(result: result) { return nil }
         return result["remaining"]?.arrayValue?.compactMap(\.stringValue) ?? []
     }

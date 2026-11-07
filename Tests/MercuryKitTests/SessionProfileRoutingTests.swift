@@ -86,6 +86,14 @@ struct SessionProfileRoutingTests {
             sessionID: sid, promptID: "p-2", answer: "yes", executionGeneration: 2)
         _ = try? await connection.activateSession(sessionID: sid)
         try? await connection.interruptSession(sessionID: sid)
+        _ = try? await connection.attachFile(sessionID: sid, dataURL: "data:text/plain;base64,aGk=")
+        _ = try? await connection.modelOptions(sessionID: sid)
+        _ = try? await connection.respondConnection(
+            sessionID: sid, opID: "op-1", answer: ConnectionAnswer(targets: []), desktopContract: 8)
+        _ = try? await connection.respondConnection(
+            sessionID: sid, opID: "op-1", answer: ConnectionAnswer(targets: []), desktopContract: 7)
+        _ = try? await connection.lockClarifyAnswer(
+            requestID: "srq-1", questionID: "q1", answer: "a", sessionID: sid)
         _ = await connection.closeSession(sessionID: sid)
     }
 
@@ -93,6 +101,11 @@ struct SessionProfileRoutingTests {
         "prompt.submit", "session.steer", "session.redirect", "prompt.cancel", "prompt.steer_queued",
         "prompt.receipt", "session.events.since", "session.mutate", "approval.respond",
         "clarify.respond", "session.resume", "session.interrupt", "session.detach",
+        // hermes v0.23 serves these on the authority too: `file.attach` and
+        // `model.options` through their legacy handlers, `connection.respond`
+        // naming its session as `owner.session_id` (contract 8) or
+        // `session_id` (7), and `clarify.lock` naming none at all.
+        "file.attach", "model.options", "connection.respond", "clarify.lock",
     ]
 
     @Test func aProfiledSessionStampsEverySessionCall() async throws {
@@ -109,6 +122,11 @@ struct SessionProfileRoutingTests {
         }
         // prompt.submit twice (submit + submitPrompt); activate's resume too.
         #expect(profiles(server, "prompt.submit").count == 2)
+        // clarify.lock's closed contract refuses an unknown key: the session
+        // id only selects the profile, it never rides along.
+        #expect(server.receivedFrames.allSatisfy {
+            $0["method"]?.stringValue != "clarify.lock" || $0["params"]?["session_id"] == nil
+        })
         await connection.stop()
     }
 
@@ -159,9 +177,14 @@ struct SessionProfileRoutingTests {
         defer { server.stop() }
         _ = try await connection.createSession(profile: "work")
         _ = try? await connection.answerServerRequest(id: "r-1", result: .object(["choice": "once"]))
+        // No session named: nothing to stamp from.
+        _ = try? await connection.lockClarifyAnswer(requestID: "srq-1", questionID: "q1", answer: "a")
+        _ = try? await connection.modelOptions()
         _ = try? await connection.request(
             "session.branch", params: ["session_id": "local-abc"])
         #expect(profiles(server, "request.answer") == [nil])
+        #expect(profiles(server, "clarify.lock") == [nil])
+        #expect(profiles(server, "model.options") == [nil])
         #expect(profiles(server, "session.branch") == [nil])
         await connection.stop()
     }
